@@ -2,6 +2,9 @@ import Foundation
 import Testing
 @testable import TableScore
 
+#if DEBUG
+// Le code testé n'existe qu'en Debug (absent des binaires Release, voir scripts/ci/check-release-symbols.sh).
+
 /// Choix du store pour le test UI de relance (`-uiTestingPersistentStore`, `-resetUITestStore`).
 @Suite("Store fichier dédié aux tests UI")
 struct PersistenceUITestStoreTests {
@@ -63,3 +66,4 @@ struct PersistenceUITestStoreTests {
         try PersistenceController.removeStoreFiles(at: store)
     }
 }
+#endif

@@ -178,6 +178,25 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Build Release (sans signature)
+        # Après les tests, dans le même runner macOS (pas de job supplémentaire).
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedDataRelease" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Inspection binaire Release zéro réseau (otool / nm)
+        run: bash scripts/ci/check-binary.sh "$RUNNER_TEMP/DerivedDataRelease"
+
+      - name: Aucun code de test ou de preview dans le binaire Release
+        run: bash scripts/ci/check-release-symbols.sh "$RUNNER_TEMP/DerivedDataRelease"
+
       - name: Conservation du résultat de tests en cas d'échec
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

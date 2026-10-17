@@ -30,16 +30,18 @@ enum PersistenceStorage: Sendable, Hashable {
 /// ```
 /// En cas d'échec : afficher une erreur (`userFacingMessage`), jamais de `fatalError`.
 enum PersistenceController {
+    #if DEBUG
     /// Argument de lancement des tests UI : stockage en mémoire (builds Debug uniquement).
     static let uiTestingLaunchArgument = "-uiTesting"
     /// Argument de lancement (Debug uniquement) : store FICHIER dédié aux tests UI de relance.
     static let uiTestingPersistentStoreLaunchArgument = "-uiTestingPersistentStore"
     /// Argument de lancement (Debug uniquement) : supprime le store dédié avant ouverture.
     static let resetUITestStoreLaunchArgument = "-resetUITestStore"
-    static let storeFileName = "TableScore.store"
     static let uiTestStoreFileName = "TableScore-uitests.store"
     /// Variables d'environnement posées par XCTest dans l'app hôte des tests unitaires.
     static let hostedTestEnvironmentKeys = ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCTestSessionIdentifier"]
+    #endif
+    static let storeFileName = "TableScore.store"
 
     /// Contexte de lancement, injecté pour rendre le choix du stockage testable.
     struct LaunchContext: Sendable, Hashable {
@@ -64,7 +66,7 @@ enum PersistenceController {
         #endif
     }
 
-    /// Choix pur du stockage :
+    /// Choix pur du stockage (tout le code des tests UI est sous `#if DEBUG`, absent des binaires Release) :
     /// - Release : **toujours** `applicationSupport` (aucun argument ne peut détourner le stockage
     ///   d'une app distribuée) ;
     /// - Debug + `-uiTestingPersistentStore` : store fichier **dédié** aux tests UI
@@ -75,6 +77,7 @@ enum PersistenceController {
     ///   jamais ouvert par les tests ;
     /// - sinon `applicationSupport`.
     static func storage(for context: LaunchContext) -> PersistenceStorage {
+        #if DEBUG
         guard context.isDebugBuild else { return .applicationSupport }
         if context.arguments.contains(uiTestingPersistentStoreLaunchArgument) {
             return .file(uiTestStoreURL)
@@ -82,6 +85,10 @@ enum PersistenceController {
         if context.arguments.contains(uiTestingLaunchArgument) { return .inMemory }
         if hostedTestEnvironmentKeys.contains(where: { context.environment[$0] != nil }) { return .inMemory }
         return .applicationSupport
+        #else
+        // Release : le contexte (arguments, environnement) est ignoré, y compris les chemins de test.
+        return .applicationSupport
+        #endif
     }
 
     /// Emplacement du stockage persistant, dans le conteneur privé de l'application.
@@ -89,6 +96,7 @@ enum PersistenceController {
         URL.applicationSupportDirectory.appending(path: storeFileName, directoryHint: .notDirectory)
     }
 
+    #if DEBUG
     /// Store fichier dédié aux tests UI de relance (distinct de `defaultStoreURL`).
     static var uiTestStoreURL: URL {
         URL.applicationSupportDirectory
@@ -119,6 +127,7 @@ enum PersistenceController {
             }
         }
     }
+    #endif
 
     static var currentSchema: Schema {
         Schema(versionedSchema: TableScoreSchemaV1.self)
@@ -169,7 +178,9 @@ enum PersistenceController {
     /// Dépôt de l'application selon le contexte de lancement (voir `storage(for:)`).
     @MainActor
     static func makeRepository(context: LaunchContext = .current) throws(GameRepositoryError) -> SwiftDataGameRepository {
+        #if DEBUG
         try resetUITestStoreIfRequested(context: context)
+        #endif
         let container = try makeContainer(storage: storage(for: context))
         return SwiftDataGameRepository(container: container)
     }
