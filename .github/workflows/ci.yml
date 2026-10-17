@@ -118,6 +118,9 @@ jobs:
           xcode-select -p
           xcodebuild -version
 
+      - name: Tests du package TableScoreKit (macOS, Foundation Darwin)
+        run: swift test --package-path Packages/TableScoreKit
+
       - name: Inventaire du projet et des simulateurs
         run: |
           set -euo pipefail
