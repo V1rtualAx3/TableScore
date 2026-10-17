@@ -1,0 +1,21 @@
+{
+  "sourceLanguage" : "fr",
+  "strings" : {
+    "Enregistrement…" : {
+
+    },
+    "Impossible de lire les parties enregistrées" : {
+
+    },
+    "moins %@" : {
+      "comment" : "Lecture VoiceOver d'un score négatif ; l'argument est la valeur absolue."
+    },
+    "Réessayer" : {
+
+    },
+    "TableScore" : {
+      "shouldTranslate" : false
+    }
+  },
+  "version" : "1.0"
+}

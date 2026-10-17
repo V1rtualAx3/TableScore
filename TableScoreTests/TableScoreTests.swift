@@ -34,9 +34,10 @@ struct AppConfigurationTests {
         #expect(Bundle.main.object(forInfoDictionaryKey: "NSBonjourServices") == nil)
     }
 
-    @Test("L'écran d'accueil se construit")
+    @Test("L'hôte de navigation et l'écran d'accueil se construisent")
     @MainActor
     func homeViewBuilds() {
+        _ = RootView()
         _ = HomeView()
     }
 }
