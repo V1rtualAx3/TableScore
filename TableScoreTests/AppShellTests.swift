@@ -24,6 +24,8 @@ struct AppShellTests {
         #expect(AccessibilityID.Round.save == "round.save")
         #expect(AccessibilityID.Round.keyboardNext == "round.keyboardNext")
         #expect(AccessibilityID.Round.keyboardDone == "round.keyboardDone")
+        #expect(AccessibilityID.Round.closerPreview == "round.closerPreview")
+        #expect(AccessibilityID.Setup.startBlockReason == "setup.startBlockReason")
         #expect(AccessibilityID.GameOver.title == "gameOver.title")
         #expect(AccessibilityID.GameOver.replay == "gameOver.replay")
         #expect(AccessibilityID.History.round(index: 3) == "history.round.3")

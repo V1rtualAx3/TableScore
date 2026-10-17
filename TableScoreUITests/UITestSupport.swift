@@ -44,13 +44,18 @@ struct FormDriver {
     let app: XCUIApplication
     /// Bouton de la zone d'action fixe (`round.save`, `setup.start`).
     let actionButton: XCUIElement
-    /// Hauteur réservée au-dessus du bouton : résumé (≤ 3 lignes), espacement et marge intérieure
-    /// de la zone d'action.
-    var reservedAboveAction: CGFloat = 96
+    /// Autres éléments de la zone d'action fixe (résumé, aperçu du clôturant, raison du blocage),
+    /// mesurés lorsqu'ils sont affichés : le haut réel de la zone est le plus haut d'entre eux.
+    var actionAreaElements: [XCUIElement] = []
     /// Bouton « OK » de la barre du clavier (identifiant dédié, ex. `round.keyboardDone`).
     var keyboardDoneButton: XCUIElement?
 
     private static let margin: CGFloat = 8
+    /// Marge intérieure verticale de `primaryActionInset` (`Theme.Spacing.m`) : le fond `.bar`
+    /// commence à cette distance au-dessus de son premier élément.
+    private static let actionAreaPadding: CGFloat = 12
+    /// Repli **seulement** si aucun élément de la zone d'action n'est mesurable.
+    private static let estimatedActionAreaHeight: CGFloat = 160
     /// Abscisse des glissements : marge du formulaire groupé, hors de toute cellule.
     private static let dragX: CGFloat = 10
     /// En dessous, un glissement n'est pas reconnu comme un défilement.
@@ -68,15 +73,23 @@ struct FormDriver {
             top = max(top, bar.frame.maxY)
         }
         var bottom = window.maxY
-        if actionButton.exists {
-            bottom = min(bottom, actionButton.frame.minY - reservedAboveAction)
-        }
         let keyboard = app.keyboards.firstMatch
         if keyboard.exists {
             bottom = min(bottom, keyboard.frame.minY - Self.keyboardToolbarHeight)
         }
+        // Haut réel de la zone d'action : le contenu défilant s'arrête au-dessus (safe area).
+        let measuredTops = ([actionButton] + actionAreaElements)
+            .filter { $0.exists }
+            .map { $0.frame }
+            .filter { !$0.isEmpty }
+            .map { $0.minY }
+        if let actionAreaTop = measuredTops.min() {
+            bottom = min(bottom, actionAreaTop - Self.actionAreaPadding - 2)
+        } else {
+            // Zone d'action (au-dessus du clavier s'il est affiché) non mesurable : estimation.
+            bottom -= Self.estimatedActionAreaHeight
+        }
         top += Self.margin
-        bottom -= Self.margin
         return top...max(top + 1, bottom)
     }
 

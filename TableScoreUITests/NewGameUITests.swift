@@ -51,7 +51,11 @@ final class NewGameUITests: XCTestCase {
 
         // Le bouton finit sous la zone « Commencer » et le clavier (le nouveau champ prend le
         // focus) : touchers dans la zone réellement visible, et chaque ajout est vérifié.
-        let form = FormDriver(app: app, actionButton: app.buttons["setup.start"])
+        let form = FormDriver(
+            app: app,
+            actionButton: app.buttons["setup.start"],
+            actionAreaElements: [app.descendants(matching: .any)["setup.startBlockReason"].firstMatch]
+        )
         let addPlayer = app.buttons["setup.addPlayer"]
         for number in 3...8 {
             form.bringIntoView(addPlayer)

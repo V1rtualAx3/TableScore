@@ -235,6 +235,10 @@ final class HistoryUITests: XCTestCase {
         FormDriver(
             app: app,
             actionButton: app.buttons["round.save"],
+            actionAreaElements: [
+                app.descendants(matching: .any)["round.blockingReasons"].firstMatch,
+                app.descendants(matching: .any)["round.closerPreview"].firstMatch,
+            ],
             keyboardDoneButton: app.buttons["round.keyboardDone"]
         )
         .replaceText(in: field, with: text, emptyValue: "vide", file: file, line: line)

@@ -129,6 +129,10 @@ private struct RoundEntryRobot {
         FormDriver(
             app: app,
             actionButton: app.buttons["round.save"],
+            actionAreaElements: [
+                app.descendants(matching: .any)["round.blockingReasons"].firstMatch,
+                app.descendants(matching: .any)["round.closerPreview"].firstMatch,
+            ],
             keyboardDoneButton: app.buttons["round.keyboardDone"]
         )
     }

@@ -49,6 +49,7 @@ private struct NewGameContent: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier(AccessibilityID.Setup.startBlockReason)
                 }
                 PrimaryActionButton("Commencer") { start() }
                     .disabled(!model.canStart)

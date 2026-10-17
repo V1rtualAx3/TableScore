@@ -30,6 +30,8 @@ enum AccessibilityID {
         // Complément T0
         static let cancel = "setup.cancel"
         static let houseRules = "setup.houseRules"
+        /// Raison affichée au-dessus de « Commencer » tant que la création est impossible.
+        static let startBlockReason = "setup.startBlockReason"
         static let targetScore = "setup.targetScore"
     }
 
@@ -54,6 +56,8 @@ enum AccessibilityID {
         static func preview(position: Int) -> String { "round.preview.\(position)" }
         static let cancel = "round.cancel"
         static let blockingReasons = "round.blockingReasons"
+        /// Pénalité du clôturant affichée au-dessus de « Enregistrer » (saisie complète).
+        static let closerPreview = "round.closerPreview"
         /// Barre du clavier : « Suivant » et « OK » (fermeture du clavier).
         static let keyboardNext = "round.keyboardNext"
         static let keyboardDone = "round.keyboardDone"
