@@ -148,6 +148,16 @@ jobs:
           xcrun simctl list devices available | grep "$udid"
           echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
 
+      - name: Clavier logiciel du simulateur (clavier matériel déconnecté)
+        # Comme sur un iPhone : le focus d'un champ affiche le clavier logiciel et sa barre
+        # (« Suivant », « OK »), mise en page attendue par les tests UI. Préférence de
+        # Simulator lue au démarrage : à écrire AVANT le boot. Sans effet si le simulateur
+        # tourne sans Simulator.app (aucun clavier matériel n'est alors relié).
+        run: |
+          set -euo pipefail
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          defaults read com.apple.iphonesimulator ConnectHardwareKeyboard
+
       - name: Démarrage du simulateur
         run: xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
