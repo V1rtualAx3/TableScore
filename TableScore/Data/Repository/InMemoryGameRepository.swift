@@ -148,6 +148,12 @@ final class InMemoryGameRepository: GameRepository {
         return true
     }
 
+    func deleteAllGames() throws(GameRepositoryError) {
+        guard !games.isEmpty else { return }
+        try failIfSimulated()
+        games = [:]
+    }
+
     // MARK: Transaction
 
     private func commit(_ updates: [SavedGame]) throws(GameRepositoryError) {

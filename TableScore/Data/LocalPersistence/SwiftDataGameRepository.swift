@@ -251,6 +251,21 @@ final class SwiftDataGameRepository: GameRepository {
         return true
     }
 
+    func deleteAllGames() throws(GameRepositoryError) {
+        discardPendingChanges()
+        // Aucun décodage : fonctionne aussi sur des parties illisibles ou dupliquées.
+        let records = try fetch(FetchDescriptor<GameRecord>())
+        // Enfants orphelins éventuels inclus : « tout supprimer » ne laisse aucune donnée.
+        let rounds = try fetch(FetchDescriptor<RoundRecord>())
+        let participants = try fetch(FetchDescriptor<ParticipantRecord>())
+        guard !records.isEmpty || !rounds.isEmpty || !participants.isEmpty else { return }
+        for roundRecord in rounds { context.delete(roundRecord) }
+        for participantRecord in participants { context.delete(participantRecord) }
+        for record in records { context.delete(record) }
+        // Une seule sauvegarde : tout ou rien (contexte abandonné en cas d'échec).
+        try commit()
+    }
+
     // MARK: Application des plans
 
     private func insert(_ game: SavedGame) throws(GameRepositoryError) {

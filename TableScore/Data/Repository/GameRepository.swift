@@ -286,6 +286,11 @@ protocol GameRepository: AnyObject {
     /// Renvoie `false` si la partie n'existait pas (appel idempotent).
     @discardableResult
     func deleteGame(id: UUID) throws(GameRepositoryError) -> Bool
+
+    /// Supprime **toutes** les parties (active, terminées, archivées, illisibles) en une seule
+    /// transaction : en cas d'échec, rien n'est supprimé et `storageFailure` est levée.
+    /// Idempotent (aucune partie ⇒ aucune écriture). La double confirmation est du ressort de l'interface.
+    func deleteAllGames() throws(GameRepositoryError)
 }
 
 @MainActor
