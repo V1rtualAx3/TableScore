@@ -11,15 +11,14 @@ import TableScoreKit
 //   sans bénéfice mesurable.
 // - Atomicité naturelle : une opération synchrone sur l'acteur principal ne peut pas être
 //   entrelacée avec une autre (double tap ⇒ deux appels successifs, le second idempotent).
-// Si un jour le volume le justifie, une implémentation `actor` pourra être ajoutée derrière un
-// protocole asynchrone sans toucher au moteur.
 
-/// Statut de cycle de vie d'une partie, choisi par l'utilisateur (jamais déduit en silence).
+/// Statut de cycle de vie d'une partie, modifié uniquement par une action explicite.
 ///
 /// - `active` : la partie courante (une seule à la fois). Elle reste `active` même lorsque le moteur
 ///   indique qu'elle est terminée, afin de pouvoir corriger la dernière manche ; la fin de partie
 ///   affichée provient toujours de `SavedGame.computation.status`.
-/// - `finished` : partie terminée (selon le moteur) et close ; lecture seule.
+/// - `finished` : partie terminée (selon le moteur) et close par l'utilisateur (`finishGame`,
+///   ou création d'une nouvelle partie) ; lecture seule, `reopenGame` permet une correction.
 /// - `archived` : partie rangée ; « interrompue » si le moteur la considère encore en cours
 ///   (`SavedGame.isInterrupted`) ; lecture seule.
 enum GameLifecycle: String, Sendable, Hashable, CaseIterable {
@@ -29,6 +28,9 @@ enum GameLifecycle: String, Sendable, Hashable, CaseIterable {
 }
 
 /// Motif précis d'une donnée persistée illisible ou incohérente.
+///
+/// Diagnostic local uniquement : ces valeurs ne sont **jamais** affichées telles quelles
+/// (voir `GameRepositoryError.userFacingMessage`).
 enum PersistedDataCorruption: Error, Sendable, Hashable {
     /// Charge utile concernée par une erreur de décodage.
     enum Payload: Sendable, Hashable {
@@ -36,23 +38,34 @@ enum PersistedDataCorruption: Error, Sendable, Hashable {
         case roundEntries(roundID: UUID)
     }
 
+    /// Longueur maximale d'une valeur brute recopiée dans un diagnostic.
+    static let maxEchoedValueLength = 32
+
+    /// Valeur brute tronquée à `maxEchoedValueLength` caractères.
     case unknownLifecycle(String)
     case unreadablePayload(Payload)
     case unsupportedFormatVersion(Payload, version: Int)
+    case payloadTooLarge(Payload, byteCount: Int)
     /// L'historique relu est refusé par le moteur (participants, manches, grilles, cumuls…).
     case invalidHistory(ValidationError)
+    /// Statut `finished` alors que le moteur considère la partie en cours.
+    case finishedGameNotOver
     case duplicateGameID(UUID)
     case missingRoundRecord(roundID: UUID)
     case multipleActiveGames(count: Int)
     /// Filet de sécurité (non atteignable en pratique) pour une erreur d'un type imprévu.
     case unexpected(description: String)
 
+    static func truncatedUnknownLifecycle(_ rawValue: String) -> PersistedDataCorruption {
+        .unknownLifecycle(String(rawValue.prefix(maxEchoedValueLength)))
+    }
+
     /// Conversion d'une erreur capturée. Volontairement fondée sur `any Error` : le code ne dépend
     /// pas de l'inférence du type d'erreur des blocs `catch` (typed throws).
     static func from(_ error: any Error) -> PersistedDataCorruption {
         if let corruption = error as? PersistedDataCorruption { return corruption }
         if let validationError = error as? ValidationError { return .invalidHistory(validationError) }
-        return .unexpected(description: String(describing: error))
+        return .unexpected(description: String(describing: type(of: error)))
     }
 }
 
@@ -64,13 +77,28 @@ enum StorageOperation: String, Sendable, Hashable {
     case encoding
 }
 
+/// Problème de titre de partie (texte libre facultatif).
+enum GameTitleIssue: Sendable, Hashable {
+    case tooLong(maxLength: Int)
+    /// Caractère de contrôle, retour à la ligne ou séparateur de ligne.
+    case invalidCharacters
+}
+
 /// Erreurs remontées par le dépôt. Aucune n'est silencieuse ; aucune ne simule un succès.
+///
+/// Les valeurs associées (`message`, motifs de corruption) servent au diagnostic local et aux
+/// tests ; elles ne sont **jamais** affichées. L'interface utilise `userFacingMessage`.
 enum GameRepositoryError: Error, Sendable, Hashable {
     /// Saisie ou historique refusé par `ScoreEngine` (rien n'a été écrit).
     case validation(ValidationError)
+    case invalidTitle(GameTitleIssue)
     case gameNotFound(UUID)
     /// Modification refusée : seule la partie `active` est modifiable.
     case gameNotActive(id: UUID, lifecycle: GameLifecycle)
+    /// Changement de statut impossible depuis `from` (ex. rouvrir une partie archivée).
+    case invalidLifecycleTransition(id: UUID, from: GameLifecycle)
+    /// Une autre partie est déjà active (identifiant fourni).
+    case anotherGameActive(UUID)
     /// `finishGame` demandé alors que le moteur considère la partie en cours.
     case gameNotOver(UUID)
     case noRoundToDelete(gameID: UUID)
@@ -78,8 +106,7 @@ enum GameRepositoryError: Error, Sendable, Hashable {
     case identifierConflict(UUID)
     /// Données persistées illisibles : jamais de crash, jamais de valeur inventée.
     case corruptedData(gameID: UUID?, PersistedDataCorruption)
-    /// Échec technique du stockage (transaction annulée). `message` sert au diagnostic local,
-    /// il n'est pas destiné à l'affichage tel quel.
+    /// Échec technique du stockage (transaction annulée).
     case storageFailure(StorageOperation, message: String)
 
     /// Conversion d'une erreur capturée (même principe que `PersistedDataCorruption.from`) :
@@ -88,6 +115,37 @@ enum GameRepositoryError: Error, Sendable, Hashable {
         if let repositoryError = error as? GameRepositoryError { return repositoryError }
         if let validationError = error as? ValidationError { return .validation(validationError) }
         return .storageFailure(operation, message: String(describing: error))
+    }
+
+    /// Message générique en français, sans nom de joueur, identifiant ni chemin de fichier.
+    /// Les view models peuvent préciser un refus de saisie à partir de `ValidationError`.
+    var userFacingMessage: String {
+        switch self {
+        case .validation:
+            String(localized: "Les informations saisies ne sont pas valides.")
+        case .invalidTitle:
+            String(localized: "Le titre de la partie n'est pas valide.")
+        case .gameNotFound:
+            String(localized: "Cette partie n'existe plus.")
+        case .gameNotActive:
+            String(localized: "Cette partie est close : elle ne peut plus être modifiée.")
+        case .invalidLifecycleTransition:
+            String(localized: "Cette action n'est pas possible pour cette partie.")
+        case .anotherGameActive:
+            String(localized: "Une autre partie est en cours.")
+        case .gameNotOver:
+            String(localized: "La partie n'est pas encore terminée.")
+        case .noRoundToDelete:
+            String(localized: "Aucune manche à supprimer.")
+        case .identifierConflict:
+            String(localized: "Cette action entre en conflit avec une saisie déjà enregistrée.")
+        case .corruptedData:
+            String(localized: "Certaines données enregistrées sont illisibles.")
+        case .storageFailure(.setup, _), .storageFailure(.read, _):
+            String(localized: "Impossible de lire les données enregistrées.")
+        case .storageFailure(.write, _), .storageFailure(.encoding, _):
+            String(localized: "L'enregistrement a échoué. Aucune modification n'a été faite.")
+        }
     }
 }
 
@@ -124,9 +182,10 @@ struct EarlyEndConflict: Sendable, Hashable {
 
 /// Résultat d'une correction de manche.
 enum RoundReplacementOutcome: Sendable, Hashable {
-    /// Correction enregistrée (ou identique à l'existant : aucune écriture). `removedRounds` liste
-    /// les manches supprimées sur décision explicite (vide sinon).
+    /// Correction enregistrée. `removedRounds` liste les manches supprimées sur décision explicite.
     case saved(SavedGame, removedRounds: [RoundInput])
+    /// Correction identique à l'existant : aucune écriture, manche non marquée corrigée.
+    case unchanged(SavedGame)
     /// Fin anticipée : rien n'a été écrit, l'interface doit faire choisir l'utilisateur.
     case requiresDecision(EarlyEndConflict)
 }
@@ -160,6 +219,10 @@ enum GameListing: Sendable, Hashable, Identifiable {
 
 /// Source de vérité unique des parties. Toute validation et tout calcul passent par `ScoreEngine` ;
 /// toute écriture est atomique (tout ou rien) et toute erreur est remontée.
+///
+/// Aucun changement de statut n'est déclenché implicitement par l'ajout ou la correction d'une
+/// manche : `finishGame`, `reopenGame` et `archiveGame` ne sont appelés que sur action explicite
+/// de l'utilisateur (seule exception documentée : `createGame` clôt l'ancienne partie active).
 @MainActor
 protocol GameRepository: AnyObject {
     /// Partie courante, ou `nil` s'il n'y en a pas.
@@ -173,7 +236,7 @@ protocol GameRepository: AnyObject {
     /// Crée la partie `id` (identifiant de brouillon : un second appel identique est idempotent).
     /// L'éventuelle partie active précédente est close dans la même transaction : `finished` si le
     /// moteur la considère terminée, sinon `archived` (« interrompue »). Noms et titre sont nettoyés
-    /// des espaces de bordure.
+    /// des espaces de bordure ; titre ≤ `GameWritePlanner.maxTitleLength` caractères.
     func createGame(
         id: UUID,
         participants: [Participant],
@@ -196,6 +259,11 @@ protocol GameRepository: AnyObject {
 
     /// Clôt la partie active si le moteur la considère terminée (idempotent si déjà `finished`).
     func finishGame(id: UUID) throws(GameRepositoryError) -> SavedGame
+
+    /// Rouvre une partie `finished` pour correction (§4.6) : elle redevient `active`, `finishedAt`
+    /// est effacé. Refusé si une autre partie est active ou si la partie est archivée ;
+    /// idempotent si elle est déjà active.
+    func reopenGame(id: UUID) throws(GameRepositoryError) -> SavedGame
 
     /// Range la partie (idempotent si déjà `archived`). L'historique est conservé.
     func archiveGame(id: UUID) throws(GameRepositoryError) -> SavedGame

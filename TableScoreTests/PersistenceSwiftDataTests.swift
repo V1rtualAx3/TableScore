@@ -157,6 +157,93 @@ struct PersistenceSwiftDataTests {
         #expect(try context.fetchCount(FetchDescriptor<RoundRecord>()) == 0)
     }
 
+    @Test("Échec de sauvegarde : correction avec suppression, suppression de manche, fin, réouverture et archivage annulés")
+    func failedHistoryAndLifecycleWritesRollBack() throws {
+        let container = try PersistenceController.makeContainer(storage: .inMemory)
+        let clock = TestClock()
+        let failures = SaveFailureSwitch()
+        let repo = SwiftDataGameRepository(
+            container: container,
+            now: { clock.next() },
+            saveHandler: { try failures.save($0) }
+        )
+        _ = try repo.createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic)
+        let r2 = Fx.round(2, closer: Fx.bob, [Fx.alice: 40, Fx.bob: 0])
+        let r3 = Fx.round(3, closer: Fx.bob, [Fx.alice: 5, Fx.bob: 0])
+        for round in [Fx.round(1, closer: Fx.bob, [Fx.alice: 50, Fx.bob: 0]), r2, r3] {
+            _ = try repo.appendRound(round, toGame: Fx.gameA)
+        }
+        let corrected = Fx.round(2, closer: Fx.bob, [Fx.alice: 60, Fx.bob: 0], id: r2.id)
+        let truncate = EarlyEndResolution.deleteRoundsAfterEarlyEnd(confirmedRoundIDs: [r3.id])
+
+        try expectFailedSaveRollsBack(repo, failures: failures, container: container) {
+            _ = try repo.replaceRound(corrected, inGame: Fx.gameA, resolution: truncate)
+        }
+        try expectFailedSaveRollsBack(repo, failures: failures, container: container) {
+            _ = try repo.deleteLastRound(ofGame: Fx.gameA)
+        }
+
+        guard case .saved = try repo.replaceRound(corrected, inGame: Fx.gameA, resolution: truncate) else {
+            Issue.record("La correction confirmée doit être enregistrée.")
+            return
+        }
+        try expectFailedSaveRollsBack(repo, failures: failures, container: container) {
+            _ = try repo.finishGame(id: Fx.gameA)
+        }
+        _ = try repo.finishGame(id: Fx.gameA)
+        try expectFailedSaveRollsBack(repo, failures: failures, container: container) {
+            _ = try repo.reopenGame(id: Fx.gameA)
+        }
+        try expectFailedSaveRollsBack(repo, failures: failures, container: container) {
+            _ = try repo.archiveGame(id: Fx.gameA)
+        }
+        #expect(try repo.game(id: Fx.gameA).lifecycle == .finished)
+        #expect(try repo.game(id: Fx.gameA).rounds.count == 2)
+    }
+
+    @Test("Vraie erreur SwiftData (store rouvert en lecture seule) : erreur remontée, rien n'est écrit")
+    func readOnlyStoreReportsRealSaveError() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "TableScoreTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appending(path: PersistenceController.storeFileName, directoryHint: .notDirectory)
+
+        do {
+            let writable = try PersistenceController.makeContainer(storage: .file(storeURL))
+            _ = try SwiftDataGameRepository(container: writable)
+                .createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic)
+        }
+
+        let readOnly = try PersistenceController.makeContainer(storage: .file(storeURL), allowsSave: false)
+        let repo = SwiftDataGameRepository(container: readOnly)
+        let before = try repo.game(id: Fx.gameA)
+        let error = repositoryError {
+            _ = try repo.appendRound(Fx.round(1, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2]), toGame: Fx.gameA)
+        }
+        #expect(error?.isWriteFailure == true)
+        #expect(try repo.game(id: Fx.gameA) == before)
+
+        let reopened = try PersistenceController.makeContainer(storage: .file(storeURL))
+        #expect(try SwiftDataGameRepository(container: reopened).game(id: Fx.gameA) == before)
+    }
+
+    /// Échec injecté à la prochaine sauvegarde : l'opération doit échouer sans rien modifier,
+    /// ni dans le contexte du dépôt, ni dans le store.
+    private func expectFailedSaveRollsBack(
+        _ repo: SwiftDataGameRepository,
+        failures: SaveFailureSwitch,
+        container: ModelContainer,
+        _ operation: () throws -> Void
+    ) throws {
+        let before = try repo.game(id: Fx.gameA)
+        failures.failNextSave = true
+        let error = repositoryError(operation)
+        #expect(error?.isWriteFailure == true)
+        #expect(failures.failNextSave == false, "La sauvegarde doit avoir été tentée.")
+        #expect(try repo.game(id: Fx.gameA) == before)
+        #expect(try SwiftDataGameRepository(container: container).game(id: Fx.gameA) == before)
+    }
+
     // MARK: Données corrompues
 
     @Test("Entrées illisibles ⇒ erreur typée, aucun crash")
@@ -289,19 +376,104 @@ struct PersistenceSwiftDataTests {
         }
     }
 
+    @Test("Statut « terminée » alors que le moteur la dit en cours ⇒ corruption dédiée")
+    func finishedButNotOverIsCorrupted() throws {
+        let container = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: container, lifecycleRaw: GameLifecycle.finished.rawValue)
+        let repo = SwiftDataGameRepository(container: container)
+
+        let error = repositoryError { _ = try repo.game(id: Fx.gameA) }
+        #expect(error == GameRepositoryError.corruptedData(gameID: Fx.gameA, .finishedGameNotOver))
+        #expect(try repo.closedGames() == [
+            .corrupted(id: Fx.gameA, updatedAt: rawDate, reason: .finishedGameNotOver)
+        ])
+    }
+
+    @Test("Doublons d'enregistrements : même joueur ou même indice de manche ⇒ corruption")
+    func duplicateRecordsAreCorrupted() throws {
+        let duplicatedPlayers = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: duplicatedPlayers, participants: [
+            Participant(id: Fx.alice, displayName: "Alice", displayOrder: 0),
+            Participant(id: Fx.alice, displayName: "Alice bis", displayOrder: 1),
+        ])
+        let playerError = repositoryError { _ = try SwiftDataGameRepository(container: duplicatedPlayers).activeGame() }
+        #expect(playerError?.historyReason == .duplicateParticipantID(Fx.alice))
+
+        let duplicatedRounds = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: duplicatedRounds, rounds: [
+            Fx.round(1, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2]),
+            Fx.round(1, closer: Fx.bob, [Fx.alice: 3, Fx.bob: 4]),
+        ])
+        let roundError = repositoryError { _ = try SwiftDataGameRepository(container: duplicatedRounds).activeGame() }
+        #expect(roundError?.historyReason == .roundIndexMismatch(expected: 2, found: 1))
+    }
+
+    @Test("Charge utile au-delà de 64 Kio : rejet typé avant décodage")
+    func oversizedPayloadIsRejected() throws {
+        let container = try PersistenceController.makeContainer(storage: .inMemory)
+        let round = Fx.round(1, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2])
+        let oversized = Data(repeating: 0x20, count: PayloadCoding.maxPayloadByteCount + 1)
+        try insertRawGame(into: container, rounds: [round], entriesPayloadOverride: oversized)
+
+        let error = repositoryError { _ = try SwiftDataGameRepository(container: container).activeGame() }
+        #expect(error == GameRepositoryError.corruptedData(
+            gameID: Fx.gameA,
+            .payloadTooLarge(.roundEntries(roundID: round.id), byteCount: PayloadCoding.maxPayloadByteCount + 1)
+        ))
+    }
+
+    @Test("Statut inconnu très long : valeur tronquée dans le diagnostic")
+    func longUnknownLifecycleIsTruncated() throws {
+        let container = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: container, lifecycleRaw: String(repeating: "z", count: 200))
+        let listings = try SwiftDataGameRepository(container: container).closedGames()
+        #expect(listings == [
+            .corrupted(id: Fx.gameA, updatedAt: rawDate, reason: .unknownLifecycle(String(repeating: "z", count: 32)))
+        ])
+    }
+
     // MARK: Configuration
 
-    @Test("Arguments de lancement : -uiTesting ⇒ mémoire, sinon Application Support")
-    func launchArgumentsSelectStorage() throws {
-        #expect(PersistenceController.storage(forLaunchArguments: ["TableScore", "-uiTesting"]) == .inMemory)
-        #expect(PersistenceController.storage(forLaunchArguments: ["TableScore"]) == .applicationSupport)
+    @Test("Choix du stockage : -uiTesting et tests hébergés seulement en Debug ; Release toujours sur disque")
+    func storageDecisionIsPure() {
+        typealias Context = PersistenceController.LaunchContext
+        let hostedTests = ["XCTestConfigurationFilePath": "/tmp/x.xctestconfiguration"]
 
-        let url = PersistenceController.defaultStoreURL
-        #expect(url.lastPathComponent == "TableScore.store")
-        #expect(url.path(percentEncoded: false).hasPrefix(URL.applicationSupportDirectory.path(percentEncoded: false)))
+        #expect(PersistenceController.storage(for: Context(arguments: ["TableScore", "-uiTesting"], environment: [:], isDebugBuild: true)) == .inMemory)
+        #expect(PersistenceController.storage(for: Context(arguments: ["TableScore"], environment: hostedTests, isDebugBuild: true)) == .inMemory)
+        #expect(PersistenceController.storage(for: Context(arguments: ["TableScore"], environment: [:], isDebugBuild: true)) == .applicationSupport)
+        // Release : aucun argument ni variable d'environnement ne détourne le stockage.
+        #expect(PersistenceController.storage(for: Context(arguments: ["TableScore", "-uiTesting"], environment: hostedTests, isDebugBuild: false)) == .applicationSupport)
+        #expect(PersistenceController.storage(for: Context(arguments: [], environment: [:], isDebugBuild: false)) == .applicationSupport)
+    }
 
-        let uiTestRepository = try PersistenceController.makeRepository(launchArguments: ["-uiTesting"])
-        #expect(try uiTestRepository.activeGame() == nil)
+    @Test("Tests unitaires hébergés : le contexte courant n'ouvre jamais le vrai store")
+    func hostedTestsNeverOpenRealStore() throws {
+        let context = PersistenceController.LaunchContext.current
+        #expect(context.isDebugBuild)
+        #expect(PersistenceController.storage(for: context) == .inMemory)
+        let repository = try PersistenceController.makeRepository(context: context)
+        #expect(try repository.activeGame() == nil)
+    }
+
+    @Test("Configuration réelle (Application Support) : ni CloudKit ni conteneur partagé")
+    func realConfigurationIsLocalOnly() throws {
+        // Inspecte la configuration sans ouvrir le store.
+        let configuration = try PersistenceController.makeConfiguration(
+            storage: .applicationSupport,
+            schema: PersistenceController.currentSchema
+        )
+        #expect(configuration.cloudKitContainerIdentifier == nil)
+        #expect(configuration.groupAppContainerIdentifier == nil)
+        #expect(!configuration.isStoredInMemoryOnly)
+        #expect(configuration.allowsSave)
+        #expect(configuration.url.standardizedFileURL == PersistenceController.defaultStoreURL.standardizedFileURL)
+        #expect(PersistenceController.defaultStoreURL.lastPathComponent == "TableScore.store")
+
+        let memory = try PersistenceController.makeConfiguration(storage: .inMemory, schema: PersistenceController.currentSchema)
+        #expect(memory.isStoredInMemoryOnly)
+        #expect(memory.cloudKitContainerIdentifier == nil)
+        #expect(memory.groupAppContainerIdentifier == nil)
     }
 
     @Test("Schéma V1 figé : seule la source de vérité est persistée (aucun cumul ni score retenu)")

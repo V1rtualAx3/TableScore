@@ -1,6 +1,15 @@
 import Foundation
 import TableScoreKit
 
+/// Dates d'une manche enregistrée (traçabilité des corrections, §4.6 / audit).
+struct SavedRoundInfo: Sendable, Hashable {
+    let createdAt: Date
+    let modifiedAt: Date
+
+    /// Vrai si la manche a été corrigée après sa première saisie (correction identique exclue).
+    var wasCorrected: Bool { modifiedAt > createdAt }
+}
+
 /// Partie telle que stockée (source de vérité) + son recalcul intégral par `ScoreEngine`.
 ///
 /// Seuls participants, règles, manches (scores bruts, clôturant, saisie), statut et dates sont
@@ -16,6 +25,8 @@ struct SavedGame: Sendable, Hashable, Identifiable {
     let rules: GameRules
     let participants: [Participant]
     let rounds: [RoundInput]
+    /// Dates par identifiant de manche (restreint aux manches présentes).
+    let roundInfo: [UUID: SavedRoundInfo]
     /// Dérivé de `participants`, `rules` et `rounds` ; jamais persisté.
     let computation: GameComputation
     let createdAt: Date
@@ -31,6 +42,7 @@ struct SavedGame: Sendable, Hashable, Identifiable {
         rules: GameRules,
         participants: [Participant],
         rounds: [RoundInput],
+        roundInfo: [UUID: SavedRoundInfo],
         createdAt: Date,
         updatedAt: Date,
         finishedAt: Date?,
@@ -46,6 +58,7 @@ struct SavedGame: Sendable, Hashable, Identifiable {
         let orderedRounds = rounds
             .sorted { $0.index < $1.index }
             .map { Self.normalized($0, order: order) }
+        let roundIDs = Set(rounds.map(\.id))
         self.init(
             validatedID: id,
             title: title,
@@ -53,6 +66,7 @@ struct SavedGame: Sendable, Hashable, Identifiable {
             rules: rules,
             participants: orderedParticipants,
             rounds: orderedRounds,
+            roundInfo: roundInfo.filter { roundIDs.contains($0.key) },
             computation: computation,
             createdAt: createdAt,
             updatedAt: updatedAt,
@@ -68,6 +82,7 @@ struct SavedGame: Sendable, Hashable, Identifiable {
         rules: GameRules,
         participants: [Participant],
         rounds: [RoundInput],
+        roundInfo: [UUID: SavedRoundInfo],
         computation: GameComputation,
         createdAt: Date,
         updatedAt: Date,
@@ -80,6 +95,7 @@ struct SavedGame: Sendable, Hashable, Identifiable {
         self.rules = rules
         self.participants = participants
         self.rounds = rounds
+        self.roundInfo = roundInfo
         self.computation = computation
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -98,13 +114,21 @@ struct SavedGame: Sendable, Hashable, Identifiable {
         lifecycle == .archived && !isOver
     }
 
+    func info(forRound roundID: UUID) -> SavedRoundInfo? {
+        roundInfo[roundID]
+    }
+
     /// Manche mise sous la forme normalisée de cette partie (comparaison d'idempotence).
     func normalized(_ round: RoundInput) -> RoundInput {
         Self.normalized(round, order: Self.displayOrderByParticipant(participants))
     }
 
     /// Nouvel historique : recalcul intégral (validation complète par le moteur).
-    func replacingRounds(_ newRounds: [RoundInput], updatedAt date: Date) throws(ValidationError) -> SavedGame {
+    func replacingRounds(
+        _ newRounds: [RoundInput],
+        roundInfo newRoundInfo: [UUID: SavedRoundInfo],
+        updatedAt date: Date
+    ) throws(ValidationError) -> SavedGame {
         try SavedGame(
             id: id,
             title: title,
@@ -112,6 +136,7 @@ struct SavedGame: Sendable, Hashable, Identifiable {
             rules: rules,
             participants: participants,
             rounds: newRounds,
+            roundInfo: newRoundInfo,
             createdAt: createdAt,
             updatedAt: date,
             finishedAt: finishedAt,
@@ -133,6 +158,7 @@ struct SavedGame: Sendable, Hashable, Identifiable {
             rules: rules,
             participants: participants,
             rounds: rounds,
+            roundInfo: roundInfo,
             computation: computation,
             createdAt: createdAt,
             updatedAt: date,

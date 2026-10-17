@@ -7,9 +7,9 @@ import SwiftData
 // mode de saisie, grille éventuelle), statut et dates. Aucun score retenu, cumul, classement ni
 // vainqueur n'est persisté : tout est recalculé par `ScoreEngine` à la lecture.
 //
-// Règles et entrées de manche sont stockées en JSON (Codable du moteur) dans une enveloppe
-// versionnée (`PersistedPayload`) plutôt qu'en attributs composites SwiftData : format explicite,
-// décodage validé par le moteur, évolution maîtrisée par `formatVersion`.
+// Règles et entrées de manche sont stockées en JSON (format figé `PersistedFormatV1`, propre à la
+// persistance) dans une enveloppe versionnée plutôt qu'en attributs composites SwiftData : format
+// explicite, décodage revalidé par le moteur, évolution maîtrisée par `formatVersion`.
 //
 // Évolution : toute modification de ces modèles exige un `TableScoreSchemaV2` (copie complète des
 // classes), une étape dans `TableScoreMigrationPlan` et la mise à jour des alias ci-dessous.
@@ -32,7 +32,7 @@ extension TableScoreSchemaV1 {
         var title: String?
         /// `GameLifecycle.rawValue` ; une valeur inconnue est signalée comme corruption.
         var lifecycleRaw: String
-        /// `GameRules` encodé dans `PersistedPayload`.
+        /// `GameRules` encodé au format `PersistedFormatV1` (enveloppe versionnée).
         var rulesPayload: Data
         var createdAt: Date
         var updatedAt: Date
@@ -86,7 +86,7 @@ extension TableScoreSchemaV1 {
         var roundID: UUID
         var roundIndex: Int
         var closingParticipantID: UUID
-        /// `[RoundEntry]` (scores bruts, mode de saisie, grille) encodé dans `PersistedPayload`.
+        /// `[RoundEntry]` (scores bruts, mode de saisie, grille) au format `PersistedFormatV1`.
         var entriesPayload: Data
         var createdAt: Date
         var modifiedAt: Date

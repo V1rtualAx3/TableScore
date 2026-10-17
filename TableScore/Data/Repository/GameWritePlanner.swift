@@ -5,8 +5,10 @@ import TableScoreKit
 /// valeurs, sans E/S. Chaque dépôt se contente d'appliquer le plan de façon atomique.
 ///
 /// Toute règle de score est déléguée à `ScoreEngine` ; ce type ne fait qu'orchestrer
-/// (idempotence, cycle de vie, résolution explicite d'une fin anticipée).
+/// (idempotence, cycle de vie, résolution explicite d'une fin anticipée, titre).
 enum GameWritePlanner {
+    /// Longueur maximale du titre facultatif d'une partie (caractères perçus).
+    static let maxTitleLength = 80
 
     enum AppendPlan: Sendable, Hashable {
         case alreadySaved
@@ -23,7 +25,8 @@ enum GameWritePlanner {
 
     // MARK: Création
 
-    /// Partie neuve, validée par le moteur (nombre de joueurs, identifiants, noms, seuil).
+    /// Partie neuve, validée par le moteur (nombre de joueurs, identifiants, noms, seuil) ;
+    /// titre facultatif contrôlé ici (≤ `maxTitleLength`, sans caractère de contrôle).
     static func newGame(
         id: UUID,
         title: String?,
@@ -31,11 +34,10 @@ enum GameWritePlanner {
         rules: GameRules,
         at date: Date
     ) throws(GameRepositoryError) -> SavedGame {
+        let cleanedTitle = try validatedTitle(title)
         let cleanedParticipants = participants.map {
             Participant(id: $0.id, displayName: $0.trimmedDisplayName, displayOrder: $0.displayOrder)
         }
-        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanedTitle = (trimmedTitle?.isEmpty ?? true) ? nil : trimmedTitle
         do {
             return try SavedGame(
                 id: id,
@@ -44,6 +46,7 @@ enum GameWritePlanner {
                 rules: rules,
                 participants: cleanedParticipants,
                 rounds: [],
+                roundInfo: [:],
                 createdAt: date,
                 updatedAt: date,
                 finishedAt: nil,
@@ -52,6 +55,20 @@ enum GameWritePlanner {
         } catch {
             throw GameRepositoryError.from(error, operation: .write)
         }
+    }
+
+    /// Titre sans espaces de bordure ; vide ⇒ `nil`.
+    static func validatedTitle(_ title: String?) throws(GameRepositoryError) -> String? {
+        guard let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        guard trimmed.count <= maxTitleLength else {
+            throw GameRepositoryError.invalidTitle(.tooLong(maxLength: maxTitleLength))
+        }
+        guard !Participant.containsDisallowedCharacters(trimmed) else {
+            throw GameRepositoryError.invalidTitle(.invalidCharacters)
+        }
+        return trimmed
     }
 
     /// Second `createGame` avec un identifiant existant : idempotent si la demande est identique.
@@ -110,7 +127,9 @@ enum GameWritePlanner {
         } catch {
             throw GameRepositoryError.from(error, operation: .write)
         }
-        return .insert(try rebuilt(game, rounds: game.rounds + [round], at: date))
+        var info = game.roundInfo
+        info[round.id] = SavedRoundInfo(createdAt: date, modifiedAt: date)
+        return .insert(try rebuilt(game, rounds: game.rounds + [round], roundInfo: info, at: date))
     }
 
     static func planReplace(
@@ -136,8 +155,13 @@ enum GameWritePlanner {
         if game.rounds.contains(normalizedRound) { return .unchanged }
 
         let correctedRounds = game.rounds.map { $0.id == round.id ? normalizedRound : $0 }
+        var info = game.roundInfo
+        info[round.id] = SavedRoundInfo(
+            createdAt: game.roundInfo[round.id]?.createdAt ?? game.createdAt,
+            modifiedAt: date
+        )
         guard let inconsistency = preview.inconsistency else {
-            let updated = try rebuilt(game, rounds: correctedRounds, at: date)
+            let updated = try rebuilt(game, rounds: correctedRounds, roundInfo: info, at: date)
             return .write(updated, replacedRound: normalizedRound, removedRounds: [])
         }
 
@@ -151,7 +175,7 @@ enum GameWritePlanner {
             guard Set(confirmedRoundIDs) == toRemove else { return .requiresDecision(conflict) }
             let kept = correctedRounds.filter { !toRemove.contains($0.id) }
             let removed = game.rounds.filter { toRemove.contains($0.id) }
-            let updated = try rebuilt(game, rounds: kept, at: date)
+            let updated = try rebuilt(game, rounds: kept, roundInfo: info, at: date)
             let replaced: RoundInput? = toRemove.contains(round.id) ? nil : normalizedRound
             return .write(updated, replacedRound: replaced, removedRounds: removed)
         }
@@ -162,7 +186,7 @@ enum GameWritePlanner {
         guard let last = game.rounds.last else {
             throw GameRepositoryError.noRoundToDelete(gameID: game.id)
         }
-        let updated = try rebuilt(game, rounds: Array(game.rounds.dropLast()), at: date)
+        let updated = try rebuilt(game, rounds: Array(game.rounds.dropLast()), roundInfo: game.roundInfo, at: date)
         return RoundDeletion(deletedRound: last, game: updated)
     }
 
@@ -181,10 +205,35 @@ enum GameWritePlanner {
         }
     }
 
-    /// `nil` : déjà rangée, aucune écriture.
+    /// `nil` : déjà active, aucune écriture. `otherActiveGameID` : partie active différente, s'il y en a.
+    static func planReopen(
+        _ game: SavedGame,
+        otherActiveGameID: UUID?,
+        at date: Date
+    ) throws(GameRepositoryError) -> SavedGame? {
+        switch game.lifecycle {
+        case .active:
+            return nil
+        case .archived:
+            throw GameRepositoryError.invalidLifecycleTransition(id: game.id, from: game.lifecycle)
+        case .finished:
+            if let otherActiveGameID {
+                throw GameRepositoryError.anotherGameActive(otherActiveGameID)
+            }
+            return game.updatingLifecycle(.active, updatedAt: date, finishedAt: nil, archivedAt: nil)
+        }
+    }
+
+    /// `nil` : déjà rangée, aucune écriture. Une partie terminée selon le moteur garde (ou reçoit)
+    /// sa date de fin.
     static func planArchive(_ game: SavedGame, at date: Date) -> SavedGame? {
         guard game.lifecycle != .archived else { return nil }
-        return game.updatingLifecycle(.archived, updatedAt: date, finishedAt: game.finishedAt, archivedAt: date)
+        return game.updatingLifecycle(
+            .archived,
+            updatedAt: date,
+            finishedAt: game.finishedAt ?? (game.isOver ? date : nil),
+            archivedAt: date
+        )
     }
 
     static func requireActive(_ game: SavedGame) throws(GameRepositoryError) {
@@ -204,10 +253,11 @@ enum GameWritePlanner {
     private static func rebuilt(
         _ game: SavedGame,
         rounds: [RoundInput],
+        roundInfo: [UUID: SavedRoundInfo],
         at date: Date
     ) throws(GameRepositoryError) -> SavedGame {
         do {
-            return try game.replacingRounds(rounds, updatedAt: date)
+            return try game.replacingRounds(rounds, roundInfo: roundInfo, updatedAt: date)
         } catch {
             throw GameRepositoryError.from(error, operation: .write)
         }

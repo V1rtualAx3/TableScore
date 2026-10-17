@@ -6,15 +6,17 @@ import TableScoreKit
 /// Même contrat et mêmes décisions que `SwiftDataGameRepository` (via `GameWritePlanner`) ;
 /// chaque écriture remplace l'état en une seule affectation (tout ou rien).
 /// Les tests UI utilisent plutôt `SwiftDataGameRepository` sur un conteneur en mémoire
-/// (`-uiTesting`) afin d'exercer le vrai chemin de persistance.
+/// (`-uiTesting`, builds Debug) afin d'exercer le vrai chemin de persistance.
 @MainActor
 final class InMemoryGameRepository: GameRepository {
     private var games: [UUID: SavedGame] = [:]
     private let now: @MainActor () -> Date
 
+    #if DEBUG
     /// Permet de vérifier l'affichage d'une erreur d'enregistrement : chaque écriture échoue
     /// (rien n'est modifié) tant que la valeur est vraie. Ne simule jamais un succès.
     var simulatesWriteFailure = false
+    #endif
 
     init(now: @escaping @MainActor () -> Date = { Date() }) {
         self.now = now
@@ -97,7 +99,7 @@ final class InMemoryGameRepository: GameRepository {
         let plan = try GameWritePlanner.planReplace(round, in: current, resolution: resolution, at: now())
         switch plan {
         case .unchanged:
-            return .saved(current, removedRounds: [])
+            return .unchanged(current)
         case .requiresDecision(let conflict):
             return .requiresDecision(conflict)
         case .write(let updated, _, let removedRounds):
@@ -115,6 +117,18 @@ final class InMemoryGameRepository: GameRepository {
     func finishGame(id: UUID) throws(GameRepositoryError) -> SavedGame {
         let current = try game(id: id)
         guard let updated = try GameWritePlanner.planFinish(current, at: now()) else { return current }
+        try commit([updated])
+        return updated
+    }
+
+    func reopenGame(id: UUID) throws(GameRepositoryError) -> SavedGame {
+        let current = try game(id: id)
+        let otherActive = games.values.first { $0.lifecycle == .active && $0.id != id }
+        guard let updated = try GameWritePlanner.planReopen(
+            current,
+            otherActiveGameID: otherActive?.id,
+            at: now()
+        ) else { return current }
         try commit([updated])
         return updated
     }
@@ -144,8 +158,10 @@ final class InMemoryGameRepository: GameRepository {
     }
 
     private func failIfSimulated() throws(GameRepositoryError) {
+        #if DEBUG
         if simulatesWriteFailure {
             throw GameRepositoryError.storageFailure(.write, message: "Échec d'écriture simulé.")
         }
+        #endif
     }
 }

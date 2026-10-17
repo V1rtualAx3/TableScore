@@ -29,8 +29,18 @@ public enum ScoreEngine {
             guard orders.insert(participant.displayOrder).inserted else {
                 throw ValidationError.duplicateDisplayOrder(participant.displayOrder)
             }
-            guard !participant.trimmedDisplayName.isEmpty else {
+            let name = participant.trimmedDisplayName
+            guard !name.isEmpty else {
                 throw ValidationError.emptyParticipantName(participantID: participant.id)
+            }
+            guard name.count <= Participant.maxDisplayNameLength else {
+                throw ValidationError.participantNameTooLong(
+                    participantID: participant.id,
+                    maxLength: Participant.maxDisplayNameLength
+                )
+            }
+            guard !Participant.containsDisallowedCharacters(name) else {
+                throw ValidationError.participantNameHasInvalidCharacters(participantID: participant.id)
             }
         }
         return participants.sorted { $0.displayOrder < $1.displayOrder }

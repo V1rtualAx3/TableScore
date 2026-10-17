@@ -315,12 +315,8 @@ struct PersistenceContractTests {
         #expect(updated.rounds.map(\.id) == [r1.id, r2.id, r3.id])
         #expect(try repo.game(id: Fx.gameA) == updated)
 
-        // Correction identique : aucune écriture (date inchangée).
-        guard case .saved(let unchanged, _) = try repo.replaceRound(corrected, inGame: Fx.gameA) else {
-            Issue.record("Une correction identique doit réussir sans écrire.")
-            return
-        }
-        #expect(unchanged == updated)
+        // Correction identique : aucune écriture (date inchangée), résultat distinct.
+        #expect(try repo.replaceRound(corrected, inGame: Fx.gameA) == .unchanged(updated))
     }
 
     @Test("Correction : manche inconnue ou indice modifié refusés", arguments: RepositoryKind.allCases)
@@ -475,6 +471,7 @@ struct PersistenceContractTests {
         #expect(try repo.game(id: Fx.gameB).rounds.isEmpty)
     }
 
+    #if DEBUG
     @Test("Dépôt en mémoire : un échec d'écriture ne modifie rien et n'est jamais masqué")
     func inMemoryWriteFailure() throws {
         let repo = InMemoryGameRepository(now: { Date(timeIntervalSinceReferenceDate: 0) })
@@ -492,5 +489,196 @@ struct PersistenceContractTests {
             Issue.record("La nouvelle tentative doit enregistrer la manche.")
             return
         }
+    }
+    #endif
+
+    // MARK: Dates de manche (audit M5)
+
+    @Test("Une correction marque la manche corrigée ; une correction identique ne change rien", arguments: RepositoryKind.allCases)
+    func roundInfoTracksCorrections(kind: RepositoryKind) throws {
+        let repo = try kind.make(clock: TestClock())
+        _ = try repo.createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic)
+        let r1 = Fx.round(1, closer: Fx.alice, [Fx.alice: 3, Fx.bob: 9])
+        let afterAppend = try repo.appendRound(r1, toGame: Fx.gameA).game
+        let initial = try #require(afterAppend.info(forRound: r1.id))
+        #expect(!initial.wasCorrected)
+        #expect(initial.createdAt == initial.modifiedAt)
+
+        let corrected = Fx.round(1, closer: Fx.alice, [Fx.alice: 3, Fx.bob: 8], id: r1.id)
+        guard case .saved(let updated, _) = try repo.replaceRound(corrected, inGame: Fx.gameA) else {
+            Issue.record("La correction doit être enregistrée.")
+            return
+        }
+        let info = try #require(updated.info(forRound: r1.id))
+        #expect(info.wasCorrected)
+        #expect(info.createdAt == initial.createdAt)
+        #expect(info.modifiedAt > initial.createdAt)
+        #expect(try repo.game(id: Fx.gameA) == updated)
+
+        #expect(try repo.replaceRound(corrected, inGame: Fx.gameA) == .unchanged(updated))
+        #expect(try repo.game(id: Fx.gameA).info(forRound: r1.id) == info)
+    }
+
+    // MARK: Réouverture (§4.6)
+
+    @Test("Rouvrir une partie terminée permet de corriger puis de la clore à nouveau", arguments: RepositoryKind.allCases)
+    func reopenAllowsCorrection(kind: RepositoryKind) throws {
+        let repo = try kind.make(clock: TestClock())
+        _ = try repo.createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic)
+        let r1 = Fx.round(1, closer: Fx.bob, [Fx.alice: 100, Fx.bob: 0])
+        _ = try repo.appendRound(r1, toGame: Fx.gameA)
+        _ = try repo.finishGame(id: Fx.gameA)
+
+        let reopened = try repo.reopenGame(id: Fx.gameA)
+        #expect(reopened.lifecycle == .active)
+        #expect(reopened.finishedAt == nil)
+        #expect(try repo.activeGame() == reopened)
+        #expect(try repo.reopenGame(id: Fx.gameA) == reopened)
+
+        // Alice avait 50 : la partie reprend (le moteur la considère en cours).
+        let corrected = Fx.round(1, closer: Fx.bob, [Fx.alice: 50, Fx.bob: 0], id: r1.id)
+        guard case .saved(let updated, _) = try repo.replaceRound(corrected, inGame: Fx.gameA) else {
+            Issue.record("La correction doit être enregistrée après réouverture.")
+            return
+        }
+        #expect(!updated.isOver)
+        let notOver = repositoryError { _ = try repo.finishGame(id: Fx.gameA) }
+        #expect(notOver == GameRepositoryError.gameNotOver(Fx.gameA))
+    }
+
+    @Test("Réouverture refusée si une autre partie est active ou si la partie est archivée", arguments: RepositoryKind.allCases)
+    func reopenRefusals(kind: RepositoryKind) throws {
+        let repo = try kind.make(clock: TestClock())
+        _ = try repo.createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic)
+        _ = try repo.appendRound(Fx.round(1, closer: Fx.bob, [Fx.alice: 100, Fx.bob: 0]), toGame: Fx.gameA)
+        let finished = try repo.finishGame(id: Fx.gameA)
+        _ = try repo.createGame(id: Fx.gameB, participants: Fx.players(2), rules: .classic)
+
+        let busy = repositoryError { _ = try repo.reopenGame(id: Fx.gameA) }
+        #expect(busy == GameRepositoryError.anotherGameActive(Fx.gameB))
+        #expect(try repo.game(id: Fx.gameA) == finished)
+
+        _ = try repo.archiveGame(id: Fx.gameA)
+        let archived = repositoryError { _ = try repo.reopenGame(id: Fx.gameA) }
+        #expect(archived == GameRepositoryError.invalidLifecycleTransition(id: Fx.gameA, from: .archived))
+    }
+
+    @Test("Archivage : date de fin posée pour une partie terminée, absente pour une interrompue", arguments: RepositoryKind.allCases)
+    func archiveSetsFinishedAtOnlyWhenOver(kind: RepositoryKind) throws {
+        let repo = try kind.make(clock: TestClock())
+        _ = try repo.createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic)
+        _ = try repo.appendRound(Fx.round(1, closer: Fx.bob, [Fx.alice: 100, Fx.bob: 0]), toGame: Fx.gameA)
+        let over = try repo.archiveGame(id: Fx.gameA)
+        #expect(over.finishedAt != nil)
+        #expect(!over.isInterrupted)
+
+        _ = try repo.createGame(id: Fx.gameB, participants: Fx.players(2), rules: .classic)
+        let interrupted = try repo.archiveGame(id: Fx.gameB)
+        #expect(interrupted.finishedAt == nil)
+        #expect(interrupted.isInterrupted)
+    }
+
+    // MARK: Textes saisis (audit M2)
+
+    @Test("Titre : 80 caractères acceptés, 81 refusés, contrôles refusés", arguments: RepositoryKind.allCases)
+    func titleValidation(kind: RepositoryKind) throws {
+        let repo = try kind.make(clock: TestClock())
+        let limit = GameWritePlanner.maxTitleLength
+        #expect(limit == 80)
+
+        let tooLong = repositoryError {
+            _ = try repo.createGame(
+                id: Fx.gameA,
+                participants: Fx.players(2),
+                rules: .classic,
+                title: String(repeating: "t", count: limit + 1)
+            )
+        }
+        #expect(tooLong == GameRepositoryError.invalidTitle(.tooLong(maxLength: 80)))
+        for title in ["Soirée\nbis", "\u{0000}", "Soirée\u{2028}bis"] {
+            let invalid = repositoryError {
+                _ = try repo.createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic, title: title)
+            }
+            #expect(invalid == GameRepositoryError.invalidTitle(.invalidCharacters))
+        }
+        #expect(try repo.activeGame() == nil)
+
+        let accepted = try repo.createGame(
+            id: Fx.gameA,
+            participants: Fx.players(2),
+            rules: .classic,
+            title: String(repeating: "t", count: limit)
+        )
+        #expect(accepted.title?.count == limit)
+    }
+
+    @Test("Noms : 24 caractères acceptés, 25 refusés, retour à la ligne et NUL refusés", arguments: RepositoryKind.allCases)
+    func participantNameValidation(kind: RepositoryKind) throws {
+        let repo = try kind.make(clock: TestClock())
+        func players(bobName: String) -> [Participant] {
+            var players = Fx.players(2)
+            players[1].displayName = bobName
+            return players
+        }
+
+        let tooLong = repositoryError {
+            _ = try repo.createGame(id: Fx.gameA, participants: players(bobName: String(repeating: "b", count: 25)), rules: .classic)
+        }
+        #expect(tooLong?.validationReason == .participantNameTooLong(participantID: Fx.bob, maxLength: 24))
+        for name in ["Bo\nb", "\u{0000}Bob"] {
+            let invalid = repositoryError {
+                _ = try repo.createGame(id: Fx.gameA, participants: players(bobName: name), rules: .classic)
+            }
+            #expect(invalid?.validationReason == .participantNameHasInvalidCharacters(participantID: Fx.bob))
+        }
+        #expect(try repo.activeGame() == nil)
+
+        let accepted = try repo.createGame(
+            id: Fx.gameA,
+            participants: players(bobName: String(repeating: "b", count: 24)),
+            rules: .classic
+        )
+        #expect(accepted.participants[1].displayName.count == 24)
+    }
+}
+
+// MARK: - Messages destinés à l'utilisateur (audit M4)
+
+@Suite("Persistance : messages d'erreur affichables")
+struct PersistenceErrorMessageTests {
+    @Test("Message générique en français, sans nom, identifiant, valeur brute ni chemin")
+    func userFacingMessagesAreGeneric() {
+        let gameID = PersistenceFixtures.gameA
+        let errors: [GameRepositoryError] = [
+            .validation(.emptyParticipantName(participantID: gameID)),
+            .invalidTitle(.tooLong(maxLength: 80)),
+            .gameNotFound(gameID),
+            .gameNotActive(id: gameID, lifecycle: .finished),
+            .invalidLifecycleTransition(id: gameID, from: .archived),
+            .anotherGameActive(gameID),
+            .gameNotOver(gameID),
+            .noRoundToDelete(gameID: gameID),
+            .identifierConflict(gameID),
+            .corruptedData(gameID: gameID, .unknownLifecycle("zombie")),
+            .storageFailure(.setup, message: "/private/var/mobile/Alice/TableScore.store"),
+            .storageFailure(.read, message: "Alice"),
+            .storageFailure(.write, message: "Alice"),
+            .storageFailure(.encoding, message: "Alice"),
+        ]
+        for error in errors {
+            let message = error.userFacingMessage
+            #expect(!message.isEmpty)
+            #expect(!message.contains("/"))
+            #expect(!message.contains("Alice"))
+            #expect(!message.contains("zombie"))
+            #expect(!message.contains(gameID.uuidString))
+        }
+    }
+
+    @Test("Valeur brute de statut tronquée à 32 caractères dans le diagnostic")
+    func unknownLifecycleIsTruncated() {
+        let raw = String(repeating: "x", count: 500)
+        #expect(PersistedDataCorruption.truncatedUnknownLifecycle(raw) == .unknownLifecycle(String(repeating: "x", count: 32)))
+        #expect(PersistedDataCorruption.truncatedUnknownLifecycle("zombie") == .unknownLifecycle("zombie"))
     }
 }

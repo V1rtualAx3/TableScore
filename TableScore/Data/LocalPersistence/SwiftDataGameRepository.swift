@@ -123,7 +123,12 @@ final class SwiftDataGameRepository: GameRepository {
             return .alreadySaved(current)
         case .insert(let updated):
             do {
-                try insertRound(updated.normalized(round), into: record, at: updated.updatedAt)
+                try insertRound(
+                    updated.normalized(round),
+                    into: record,
+                    info: updated.info(forRound: round.id),
+                    at: updated.updatedAt
+                )
                 RecordMapper.apply(updated, toHeaderOf: record)
             } catch {
                 context.rollback()
@@ -145,14 +150,15 @@ final class SwiftDataGameRepository: GameRepository {
         let plan = try GameWritePlanner.planReplace(round, in: current, resolution: resolution, at: now())
         switch plan {
         case .unchanged:
-            return .saved(current, removedRounds: [])
+            return .unchanged(current)
         case .requiresDecision(let conflict):
             // Rien n'a été modifié dans le contexte : la décision revient à l'interface.
             return .requiresDecision(conflict)
         case .write(let updated, let replacedRound, let removedRounds):
             do {
                 if let replacedRound {
-                    try updateRound(replacedRound, in: record, at: updated.updatedAt)
+                    let modifiedAt = updated.info(forRound: replacedRound.id)?.modifiedAt ?? updated.updatedAt
+                    try updateRound(replacedRound, in: record, modifiedAt: modifiedAt)
                 }
                 let removedIDs = Set(removedRounds.map(\.id))
                 for roundRecord in record.rounds where removedIDs.contains(roundRecord.roundID) {
@@ -192,6 +198,21 @@ final class SwiftDataGameRepository: GameRepository {
         let record = try requireRecord(id: id)
         let current = try map(record)
         guard let updated = try GameWritePlanner.planFinish(current, at: now()) else { return current }
+        RecordMapper.apply(updated, toHeaderOf: record)
+        try commit()
+        return updated
+    }
+
+    func reopenGame(id: UUID) throws(GameRepositoryError) -> SavedGame {
+        discardPendingChanges()
+        let record = try requireRecord(id: id)
+        let current = try map(record)
+        let otherActive = try fetchActiveRecords().first { $0.gameID != id }
+        guard let updated = try GameWritePlanner.planReopen(
+            current,
+            otherActiveGameID: otherActive?.gameID,
+            at: now()
+        ) else { return current }
         RecordMapper.apply(updated, toHeaderOf: record)
         try commit()
         return updated
@@ -247,24 +268,29 @@ final class SwiftDataGameRepository: GameRepository {
             participantRecord.game = record
         }
         for round in game.rounds {
-            try insertRound(round, into: record, at: game.updatedAt)
+            try insertRound(round, into: record, info: game.info(forRound: round.id), at: game.updatedAt)
         }
     }
 
-    private func insertRound(_ round: RoundInput, into record: GameRecord, at date: Date) throws(GameRepositoryError) {
+    private func insertRound(
+        _ round: RoundInput,
+        into record: GameRecord,
+        info: SavedRoundInfo?,
+        at date: Date
+    ) throws(GameRepositoryError) {
         let roundRecord = RoundRecord(
             roundID: round.id,
             roundIndex: round.index,
             closingParticipantID: round.closingParticipantID,
             entriesPayload: try RecordMapper.entriesPayload(of: round),
-            createdAt: date,
-            modifiedAt: date
+            createdAt: info?.createdAt ?? date,
+            modifiedAt: info?.modifiedAt ?? date
         )
         context.insert(roundRecord)
         roundRecord.game = record
     }
 
-    private func updateRound(_ round: RoundInput, in record: GameRecord, at date: Date) throws(GameRepositoryError) {
+    private func updateRound(_ round: RoundInput, in record: GameRecord, modifiedAt: Date) throws(GameRepositoryError) {
         let payload = try RecordMapper.entriesPayload(of: round)
         let matching = record.rounds.filter { $0.roundID == round.id }
         guard matching.count == 1, let roundRecord = matching.first else {
@@ -272,7 +298,7 @@ final class SwiftDataGameRepository: GameRepository {
         }
         roundRecord.closingParticipantID = round.closingParticipantID
         roundRecord.entriesPayload = payload
-        roundRecord.modifiedAt = date
+        roundRecord.modifiedAt = modifiedAt
     }
 
     /// Ancienne partie active lors d'une création ; une partie illisible est rangée telle quelle.
@@ -334,7 +360,7 @@ final class SwiftDataGameRepository: GameRepository {
         do {
             return try context.fetch(descriptor)
         } catch {
-            throw GameRepositoryError.storageFailure(.read, message: String(describing: error))
+            throw GameRepositoryError.storageFailure(.read, message: String(describing: type(of: error)))
         }
     }
 

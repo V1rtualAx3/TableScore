@@ -11,6 +11,10 @@ public enum ValidationError: Error, Sendable, Hashable {
     case duplicateParticipantID(UUID)
     case duplicateDisplayOrder(Int)
     case emptyParticipantName(participantID: UUID)
+    /// Nom (sans espaces de bordure) plus long que `Participant.maxDisplayNameLength` graphèmes.
+    case participantNameTooLong(participantID: UUID, maxLength: Int)
+    /// Caractère de contrôle ou retour à la ligne dans le nom.
+    case participantNameHasInvalidCharacters(participantID: UUID)
 
     // Manche
     case unknownParticipant(UUID)
