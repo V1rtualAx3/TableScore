@@ -11,8 +11,8 @@ public enum CloserVerdict: Sendable, Hashable {
     case zeroNeverDoubled
     /// Score brut négatif : jamais doublé, même en cas d'égalité.
     case negativeNeverDoubled
-    /// Le doublement aurait dû s'appliquer mais la règle maison le désactive.
-    case penaltyDisabledByHouseRules
+    /// Le doublement aurait dû s'appliquer (mêmes causes que `doubled`) mais la règle maison le désactive.
+    case penaltyDisabledByHouseRules(lowerParticipantIDs: [UUID], tiedParticipantIDs: [UUID])
 
     public var isDoubled: Bool {
         if case .doubled = self { return true }
@@ -87,6 +87,11 @@ public struct GameComputation: Sendable, Hashable {
     /// Classement sur `totals` (égalités : ordre d'affichage).
     public let standings: [Standing]
     public let status: GameStatus
+    /// Cumuls à la fin de la manche qui termine la partie (base de `winnerIDs`) ; `nil` si en cours.
+    /// Diffère de `totals` seulement en cas d'incohérence de fin anticipée.
+    public let totalsAtEnd: [UUID: Int]?
+    /// Classement sur `totalsAtEnd` ; `nil` si en cours.
+    public let standingsAtEnd: [Standing]?
     public let inconsistency: EarlyEndInconsistency?
 
     /// Une nouvelle manche ne peut être ajoutée qu'à une partie en cours.

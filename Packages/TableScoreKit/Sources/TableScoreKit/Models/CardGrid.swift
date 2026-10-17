@@ -16,9 +16,7 @@ public struct CardColumn: Codable, Sendable, Hashable {
 
     public init(top: Int?, middle: Int?, bottom: Int?, isMarkedRemoved: Bool = false) throws(ValidationError) {
         for value in [top, middle, bottom] {
-            if let value, !CardGrid.cardValues.contains(value) {
-                throw ValidationError.cardValueOutOfRange(value)
-            }
+            try CardGrid.validateCardValue(value)
         }
         self.init(validatedTop: top, middle: middle, bottom: bottom, isMarkedRemoved: isMarkedRemoved)
     }
@@ -78,13 +76,11 @@ public struct CardColumn: Codable, Sendable, Hashable {
         let middle = try container.decodeIfPresent(Int.self, forKey: .middle)
         let bottom = try container.decodeIfPresent(Int.self, forKey: .bottom)
         let isMarkedRemoved = try container.decodeIfPresent(Bool.self, forKey: .isMarkedRemoved) ?? false
-        for value in [top, middle, bottom] {
-            if let value, !CardGrid.cardValues.contains(value) {
-                throw DecodingError.dataCorrupted(DecodingError.Context(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "Valeur de carte hors plage : \(value)"
-                ))
-            }
+        for value in [top, middle, bottom] where !CardGrid.isValidCardValue(value) {
+            throw DecodingError.dataCorrupted(DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "Valeur de carte hors plage."
+            ))
         }
         self.init(validatedTop: top, middle: middle, bottom: bottom, isMarkedRemoved: isMarkedRemoved)
     }
@@ -136,6 +132,19 @@ public struct CardGrid: Codable, Sendable, Hashable {
     /// Valeurs des cartes de Skyjo classique.
     public static let cardValues: ClosedRange<Int> = -2...12
 
+    /// Vrai pour une case vide (`nil`) ou une valeur de carte classique (−2…12).
+    public static func isValidCardValue(_ value: Int?) -> Bool {
+        guard let value else { return true }
+        return cardValues.contains(value)
+    }
+
+    /// Point unique de validation des valeurs de carte.
+    static func validateCardValue(_ value: Int?) throws(ValidationError) {
+        if let value, !isValidCardValue(value) {
+            throw ValidationError.cardValueOutOfRange(value)
+        }
+    }
+
     /// Toujours exactement `columnCount` colonnes (garanti par les initialiseurs et le décodage).
     public private(set) var columns: [CardColumn]
 
@@ -174,9 +183,7 @@ public struct CardGrid: Codable, Sendable, Hashable {
         guard columns.indices.contains(column), (0..<Self.rowCount).contains(row) else {
             throw ValidationError.cardPositionOutOfRange(column: column, row: row)
         }
-        if let value, !Self.cardValues.contains(value) {
-            throw ValidationError.cardValueOutOfRange(value)
-        }
+        try Self.validateCardValue(value)
         columns[column].assign(value, row: row)
     }
 

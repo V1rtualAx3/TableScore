@@ -46,6 +46,9 @@ struct GameHistoryTests {
         #expect(game.status == .finished(roundIndex: 2, winnerIDs: [Fx.bob]))
         #expect(game.inconsistency == nil)
         #expect(!game.acceptsNewRound)
+        // Sans incohérence, l'état de fin coïncide avec l'état courant.
+        #expect(game.totalsAtEnd == game.totals)
+        #expect(game.standingsAtEnd == game.standings)
     }
 
     @Test("§10 n° 8 : 99 → 99 ⇒ la partie continue")
@@ -57,6 +60,8 @@ struct GameHistoryTests {
         #expect(game.totals[Fx.alice] == 99)
         #expect(game.status == .inProgress)
         #expect(game.acceptsNewRound)
+        #expect(game.totalsAtEnd == nil)
+        #expect(game.standingsAtEnd == nil)
     }
 
     @Test("Exactement 100 ⇒ fin de partie")
@@ -159,22 +164,50 @@ struct GameHistoryTests {
         #expect(after.rounds.map(\.isAfterGameEnd) == [false, false, true])
         #expect(after.totals == [Fx.alice: 115, Fx.bob: 30])
         #expect(!after.acceptsNewRound)
+
+        // Les vainqueurs se lisent sur les cumuls de la manche de fin, pas sur les cumuls courants.
+        let totalsAtEnd = try #require(after.totalsAtEnd)
+        let standingsAtEnd = try #require(after.standingsAtEnd)
+        #expect(totalsAtEnd == [Fx.alice: 110, Fx.bob: 20])
+        #expect(totalsAtEnd == after.rounds[1].totalsAfterRound)
+        #expect(standingsAtEnd.map(\.total) == [20, 110])
+        let minimum = try #require(totalsAtEnd.values.min())
+        let winnersFromTotals = Fx.players(2).map(\.id).filter { totalsAtEnd[$0] == minimum }
+        #expect(after.status == .finished(roundIndex: 2, winnerIDs: winnersFromTotals))
+        #expect(standingsAtEnd.filter(\.isLeader).map(\.participantID) == winnersFromTotals)
     }
 
-    @Test("Recalcul déterministe, indépendant de l'ordre des entrées et des manches fournies")
-    func deterministicRecalculation() throws {
+    @Test("Résultat identique quel que soit l'ordre des entrées et des manches fournies")
+    func independentOfInputOrder() throws {
         let r1 = Fx.round(1, closer: Fx.alice, [Fx.alice: 7, Fx.bob: 7, Fx.chloe: 1])
         let r2 = Fx.round(2, closer: Fx.chloe, [Fx.alice: 3, Fx.bob: -2, Fx.chloe: 9])
         var r1Reversed = r1
         r1Reversed.entries.reverse()
+        var r2Rotated = r2
+        r2Rotated.entries = Array(r2.entries.dropFirst()) + [r2.entries[0]]
 
-        let first = try compute([r1, r2], players: 3)
-        let second = try compute([r1, r2], players: 3)
-        let shuffled = try compute([r2, r1Reversed], players: 3)
-        #expect(first == second)
-        #expect(first.rounds.map(\.totalsAfterRound) == shuffled.rounds.map(\.totalsAfterRound))
-        #expect(first.status == shuffled.status)
-        #expect(first.standings == shuffled.standings)
+        let reference = try compute([r1, r2], players: 3)
+        let shuffled = try compute([r2Rotated, r1Reversed], players: 3)
+        // Égalité complète : manches, scores (ordre d'affichage), verdicts, cumuls, classement, statut.
+        #expect(shuffled == reference)
+        #expect(reference.rounds.map(\.scoring.closingEffectiveScore) == [14, 18])
+        #expect(reference.totals == [Fx.alice: 17, Fx.bob: 5, Fx.chloe: 19])
+    }
+
+    @Test("Changer l'ordre d'affichage ne modifie ni identités ni cumuls, seulement l'ordre de présentation")
+    func displayOrderOnlyAffectsPresentation() throws {
+        let rounds = [Fx.round(1, closer: Fx.alice, [Fx.alice: 4, Fx.bob: 4, Fx.chloe: 2])]
+        var reordered = Fx.players(3)
+        reordered[0].displayOrder = 2
+        reordered[2].displayOrder = 0
+
+        let reference = try compute(rounds, players: 3)
+        let moved = try ScoreEngine.computeGame(participants: reordered, rounds: rounds, rules: .classic)
+        #expect(moved.totals == reference.totals)
+        #expect(moved.rounds[0].scoring.scores.map(\.participantID) == [Fx.chloe, Fx.bob, Fx.alice])
+        #expect(moved.rounds[0].scoring.verdict == .doubled(lowerParticipantIDs: [Fx.chloe], tiedParticipantIDs: [Fx.bob]))
+        // Aucune égalité de cumul (Chloé 2, Bob 4, Alice 8) : le classement ne dépend que des totaux.
+        #expect(moved.standings.map(\.participantID) == reference.standings.map(\.participantID))
     }
 
     @Test("Indices non continus refusés")
@@ -207,15 +240,15 @@ struct GameHistoryTests {
         }
     }
 
-    @Test("Débordement du cumul ⇒ erreur, pas de crash")
+    @Test("Débordement du cumul ⇒ erreur contextualisée, pas de crash")
     func totalOverflow() {
-        #expect(throws: ValidationError.arithmeticOverflow(participantID: Fx.alice)) {
+        #expect(throws: ValidationError.invalidRound(index: 2, reason: .arithmeticOverflow(participantID: Fx.alice))) {
             try compute([
                 Fx.round(1, closer: Fx.bob, [Fx.alice: Int.max, Fx.bob: 0]),
                 Fx.round(2, closer: Fx.bob, [Fx.alice: 1, Fx.bob: 0]),
             ])
         }
-        #expect(throws: ValidationError.arithmeticOverflow(participantID: Fx.alice)) {
+        #expect(throws: ValidationError.invalidRound(index: 2, reason: .arithmeticOverflow(participantID: Fx.alice))) {
             try compute([
                 Fx.round(1, closer: Fx.bob, [Fx.alice: Int.min, Fx.bob: 0]),
                 Fx.round(2, closer: Fx.bob, [Fx.alice: -1, Fx.bob: 0]),
@@ -283,6 +316,92 @@ struct GameHistoryTests {
                 Fx.round(2, closer: Fx.bob, [Fx.alice: 1, Fx.bob: 0]),
                 to: [], participants: players, rules: .classic
             )
+        }
+    }
+
+    @Test("Ajout d'une manche invalide ⇒ erreur contextualisée par l'indice")
+    func appendInvalidRound() {
+        let players = Fx.players(3)
+        let existing = [Fx.round(1, closer: Fx.alice, [Fx.alice: 3, Fx.bob: 9, Fx.chloe: 4])]
+        #expect(throws: ValidationError.invalidRound(index: 2, reason: .missingEntry(participantID: Fx.chloe))) {
+            try ScoreEngine.computeAppending(
+                Fx.round(2, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2]),
+                to: existing, participants: players, rules: .classic
+            )
+        }
+        let stranger = pid(42)
+        #expect(throws: ValidationError.invalidRound(index: 2, reason: .closingParticipantNotInGame(stranger))) {
+            try ScoreEngine.computeAppending(
+                Fx.round(2, closer: stranger, [Fx.alice: 1, Fx.bob: 2, Fx.chloe: 3]),
+                to: existing, participants: players, rules: .classic
+            )
+        }
+    }
+
+    @Test("Historique corrompu : brut ≠ total de la grille ⇒ erreur, pas de calcul")
+    func corruptedCardEntryInHistory() throws {
+        let grid = try CardGrid(rows: [[7, 1, 2, 3], [7, 4, 5, 6], [7, 8, 9, 10]]) // total 48
+        let forged = RoundInput(index: 2, closingParticipantID: Fx.bob, entries: [
+            RoundEntry(participantID: Fx.alice, rawScore: 12, source: .cards(grid)),
+            .points(Fx.bob, rawScore: 5),
+        ])
+        let rounds = [Fx.round(1, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2]), forged]
+        let expected = ValidationError.invalidRound(
+            index: 2,
+            reason: .cardGridScoreMismatch(participantID: Fx.alice, expected: 48, found: 12)
+        )
+        #expect(throws: expected) {
+            try compute(rounds)
+        }
+        #expect(expected.underlyingReason == .cardGridScoreMismatch(participantID: Fx.alice, expected: 48, found: 12))
+        #expect(ValidationError.missingClosingParticipant.underlyingReason == .missingClosingParticipant)
+    }
+
+    // MARK: Correction d'une manche
+
+    @Test("Correction via computeReplacing : recalcul intégral, incohérence signalée sans suppression")
+    func replacingRecomputes() throws {
+        let players = Fx.players(2)
+        let r1 = Fx.round(1, closer: Fx.bob, [Fx.alice: 50, Fx.bob: 10])
+        let r2 = Fx.round(2, closer: Fx.bob, [Fx.alice: 40, Fx.bob: 10])
+        let r3 = Fx.round(3, closer: Fx.bob, [Fx.alice: 5, Fx.bob: 5])
+        let rounds = [r1, r2, r3]
+
+        var corrected = r1
+        corrected.closingParticipantID = Fx.alice // Alice 50 > Bob 10 ⇒ doublée : 100
+        let result = try ScoreEngine.computeReplacing(corrected, in: rounds, participants: players, rules: .classic)
+        #expect(result.rounds.count == 3)
+        #expect(result.rounds[0].scoring.closingEffectiveScore == 100)
+        #expect(result.status == .finished(roundIndex: 1, winnerIDs: [Fx.bob]))
+        #expect(result.inconsistency?.subsequentRoundIDs == [r2.id, r3.id])
+        #expect(result.totalsAtEnd == [Fx.alice: 100, Fx.bob: 10])
+
+        // Le résultat est identique à un recalcul complet de l'historique corrigé.
+        let full = try ScoreEngine.computeGame(participants: players, rounds: [corrected, r2, r3], rules: .classic)
+        #expect(result == full)
+    }
+
+    @Test("Correction refusée : manche inconnue, indice modifié ou entrée invalide")
+    func replacingRejections() {
+        let players = Fx.players(2)
+        let r1 = Fx.round(1, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2])
+        let r2 = Fx.round(2, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2])
+
+        let unknown = Fx.round(1, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2])
+        #expect(throws: ValidationError.unknownRound(unknown.id)) {
+            try ScoreEngine.computeReplacing(unknown, in: [r1, r2], participants: players, rules: .classic)
+        }
+
+        var moved = r2
+        moved.index = 1
+        #expect(throws: ValidationError.roundIndexMismatch(expected: 2, found: 1)) {
+            try ScoreEngine.computeReplacing(moved, in: [r1, r2], participants: players, rules: .classic)
+        }
+
+        var incomplete = r2
+        incomplete.entries = [.points(Fx.alice, rawScore: 1)]
+        #expect(throws: ValidationError.invalidRound(index: 2, reason: .missingEntry(participantID: Fx.bob))) {
+            try ScoreEngine.computeReplacing(incomplete, in: [r1, r2], participants: players, rules: .classic)
         }
     }
 

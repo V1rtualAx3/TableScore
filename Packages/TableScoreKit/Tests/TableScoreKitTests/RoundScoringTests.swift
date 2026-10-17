@@ -107,7 +107,35 @@ struct RoundScoringTests {
         #expect(GameRules().isCloserPenaltyActive)
         #expect(GameRules().isOfficial)
         #expect(GameRules().targetScore == 100)
-        #expect(GameRules(houseRules: HouseRules()).isCloserPenaltyActive)
+        #expect(GameRules.classic.houseRules == nil)
+    }
+
+    @Test("Règles maison vides normalisées en nil, à l'initialisation comme à la modification")
+    func emptyHouseRulesNormalized() {
+        let rules = GameRules(houseRules: HouseRules())
+        #expect(rules.houseRules == nil)
+        #expect(rules == GameRules.classic)
+        #expect(rules.isOfficial)
+
+        var edited = GameRules(houseRules: HouseRules(isCloserPenaltyDisabled: true))
+        #expect(edited.houseRules != nil)
+        edited.houseRules?.isCloserPenaltyDisabled = false
+        #expect(edited.houseRules == nil)
+        #expect(edited == GameRules.classic)
+    }
+
+    @Test("Seuil personnalisé ⇒ règles non officielles")
+    func customTargetIsNotOfficial() {
+        #expect(GameRules(targetScore: 50).isOfficial == false)
+        #expect(GameRules(targetScore: 50).isCloserPenaltyActive)
+    }
+
+    @Test("§10 n° 2 littéral : 2 joueurs, clôturant 10 contre 10 ⇒ 20")
+    func twoPlayersTieDoubles() throws {
+        let result = try score([Fx.alice: 10, Fx.bob: 10])
+        #expect(result.closingEffectiveScore == 20)
+        #expect(result.verdict == .doubled(lowerParticipantIDs: [], tiedParticipantIDs: [Fx.bob]))
+        #expect(result.score(for: Fx.bob)?.effectiveScore == 10)
     }
 
     @Test("Règle maison : pénalité désactivée uniquement si explicitement demandée")
@@ -117,7 +145,12 @@ struct RoundScoringTests {
 
         let tie = try score([Fx.alice: 10, Fx.bob: 10], rules: rules)
         #expect(tie.closingEffectiveScore == 10)
-        #expect(tie.verdict == .penaltyDisabledByHouseRules)
+        #expect(tie.verdict == .penaltyDisabledByHouseRules(lowerParticipantIDs: [], tiedParticipantIDs: [Fx.bob]))
+        #expect(!tie.verdict.isDoubled)
+
+        let beaten = try score([Fx.alice: 10, Fx.bob: 4, Fx.chloe: 10], rules: rules)
+        #expect(beaten.closingEffectiveScore == 10)
+        #expect(beaten.verdict == .penaltyDisabledByHouseRules(lowerParticipantIDs: [Fx.bob], tiedParticipantIDs: [Fx.chloe]))
 
         let sole = try score([Fx.alice: 4, Fx.bob: 10], rules: rules)
         #expect(sole.verdict == .soleLowest)

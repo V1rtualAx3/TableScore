@@ -14,6 +14,9 @@ public struct HouseRules: Codable, Sendable, Hashable {
     public init(isCloserPenaltyDisabled: Bool = false) {
         self.isCloserPenaltyDisabled = isCloserPenaltyDisabled
     }
+
+    /// Aucune variante active : équivalent aux règles officielles.
+    public var isEmpty: Bool { self == HouseRules() }
 }
 
 /// Règles d'une partie. Valeur par défaut : Skyjo classique, fin à 100 points, sans règle maison.
@@ -28,8 +31,10 @@ public struct GameRules: Codable, Sendable, Hashable {
     public var edition: GameEdition
     /// La partie se termine après la manche où au moins un cumul atteint ou dépasse ce seuil.
     public var targetScore: Int
-    /// `nil` = règles officielles. Une variante n'est active que si elle est explicitement fournie ici.
-    public var houseRules: HouseRules?
+    /// `nil` = aucune variante. Des règles maison sans variante active sont normalisées en `nil`.
+    public var houseRules: HouseRules? {
+        didSet { houseRules = Self.normalized(houseRules) }
+    }
 
     public init(
         edition: GameEdition = .classic,
@@ -38,7 +43,7 @@ public struct GameRules: Codable, Sendable, Hashable {
     ) {
         self.edition = edition
         self.targetScore = targetScore
-        self.houseRules = houseRules
+        self.houseRules = Self.normalized(houseRules)
     }
 
     /// Le doublement du clôturant s'applique sauf désactivation explicite en règles maison.
@@ -46,8 +51,34 @@ public struct GameRules: Codable, Sendable, Hashable {
         !(houseRules?.isCloserPenaltyDisabled ?? false)
     }
 
-    /// Vrai si la partie suit strictement la configuration officielle (classique, 100 points).
+    /// Vrai si le calcul suit strictement la règle officielle (classique, 100 points, pénalité active).
     public var isOfficial: Bool {
-        edition == .classic && houseRules == nil && targetScore == Self.officialTargetScore
+        edition == .classic && targetScore == Self.officialTargetScore && isCloserPenaltyActive
+    }
+
+    private static func normalized(_ houseRules: HouseRules?) -> HouseRules? {
+        guard let houseRules, !houseRules.isEmpty else { return nil }
+        return houseRules
+    }
+
+    // MARK: Codable (le décodage passe par l'initialiseur pour normaliser)
+
+    private enum CodingKeys: String, CodingKey {
+        case edition, targetScore, houseRules
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let edition = try container.decode(GameEdition.self, forKey: .edition)
+        let targetScore = try container.decode(Int.self, forKey: .targetScore)
+        let houseRules = try container.decodeIfPresent(HouseRules.self, forKey: .houseRules)
+        self.init(edition: edition, targetScore: targetScore, houseRules: houseRules)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(edition, forKey: .edition)
+        try container.encode(targetScore, forKey: .targetScore)
+        try container.encodeIfPresent(houseRules, forKey: .houseRules)
     }
 }

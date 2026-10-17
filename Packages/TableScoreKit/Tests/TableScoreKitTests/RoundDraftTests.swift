@@ -156,22 +156,166 @@ struct RoundDraftTests {
         #expect(try draft.makeRoundInput() == original)
     }
 
+    // MARK: Bascule Points ↔ Cartes (arbitrage)
+
+    private static let fullGrid: CardGrid = {
+        // Total 48 (colonne 7/7/7 retirée) ; construction sans échec possible.
+        var grid = CardGrid()
+        let rows: [[Int]] = [[7, 1, 2, 3], [7, 4, 5, 6], [7, 8, 9, 10]]
+        for (row, values) in rows.enumerated() {
+            for (column, value) in values.enumerated() {
+                try? grid.setCard(value, column: column, row: row)
+            }
+        }
+        return grid
+    }()
+
+    @Test("Cartes → points, grille complète, points vides ⇒ pré-rempli avec le total")
+    func cardsToPointsPrefillsEmptyPoints() throws {
+        #expect(Self.fullGrid.evaluate().rawScore == 48)
+        var draft = RoundDraft(index: 1, participants: Fx.players(2))
+        draft.setInputMethod(.cards, for: Fx.alice)
+        draft.updateEntry(for: Fx.alice) { $0.cardGrid = Self.fullGrid }
+        #expect(draft.entry(for: Fx.alice)?.points == nil)
+
+        draft.setInputMethod(.points, for: Fx.alice)
+        let entry = try #require(draft.entry(for: Fx.alice))
+        #expect(entry.points == 48)
+        #expect(entry.isPointsDerivedFromGrid)
+        #expect(entry.cardGrid == Self.fullGrid) // grille conservée
+    }
+
+    @Test("Cartes → points : une saisie manuelle n'est jamais écrasée")
+    func manualPointsAreNeverOverwritten() throws {
+        var draft = RoundDraft(index: 1, participants: Fx.players(2))
+        draft.setPoints(30, for: Fx.alice)
+        draft.setInputMethod(.cards, for: Fx.alice)
+        draft.updateEntry(for: Fx.alice) { $0.cardGrid = Self.fullGrid }
+        #expect(draft.entry(for: Fx.alice)?.rawScore == 48)
+
+        draft.setInputMethod(.points, for: Fx.alice)
+        let entry = try #require(draft.entry(for: Fx.alice))
+        #expect(entry.points == 30)
+        #expect(!entry.isPointsDerivedFromGrid)
+    }
+
+    @Test("Cartes → points : un score issu de la grille suit les corrections de la grille")
+    func derivedPointsFollowGrid() throws {
+        var draft = RoundDraft(index: 1, participants: Fx.players(2))
+        draft.setInputMethod(.cards, for: Fx.alice)
+        draft.updateEntry(for: Fx.alice) { $0.cardGrid = Self.fullGrid }
+        draft.setInputMethod(.points, for: Fx.alice)
+        #expect(draft.entry(for: Fx.alice)?.points == 48)
+
+        draft.setInputMethod(.cards, for: Fx.alice)
+        try draft.setCard(12, column: 3, row: 2, for: Fx.alice) // 10 → 12
+        draft.setInputMethod(.points, for: Fx.alice)
+        #expect(draft.entry(for: Fx.alice)?.points == 50)
+
+        // Une saisie manuelle ultérieure reprend la main.
+        draft.setPoints(7, for: Fx.alice)
+        #expect(draft.entry(for: Fx.alice)?.isPointsDerivedFromGrid == false)
+    }
+
+    @Test("Cartes → points avec grille incomplète ⇒ champ points inchangé")
+    func incompleteGridDoesNotPrefill() throws {
+        var draft = RoundDraft(index: 1, participants: Fx.players(2))
+        draft.setInputMethod(.cards, for: Fx.alice)
+        try draft.setCard(5, column: 0, row: 0, for: Fx.alice)
+        draft.setInputMethod(.points, for: Fx.alice)
+        #expect(draft.entry(for: Fx.alice)?.points == nil)
+        #expect(draft.entry(for: Fx.alice)?.cardGrid.columns[0][0] == 5)
+    }
+
+    @Test("Symétrie brouillon neuf / brouillon de correction")
+    func newAndEditingDraftsBehaveAlike() throws {
+        var fresh = RoundDraft(index: 1, participants: Fx.players(2))
+        fresh.setInputMethod(.cards, for: Fx.alice)
+        fresh.updateEntry(for: Fx.alice) { $0.cardGrid = Self.fullGrid }
+        fresh.setPoints(9, for: Fx.bob)
+        fresh.closingParticipantID = Fx.bob
+        let round = try fresh.makeRoundInput()
+
+        var edited = RoundDraft(editing: round, participants: Fx.players(2))
+        let editedEntry = try #require(edited.entry(for: Fx.alice))
+        #expect(editedEntry.inputMethod == .cards)
+        #expect(editedEntry.points == 48)
+        #expect(editedEntry.isPointsDerivedFromGrid)
+
+        fresh.setInputMethod(.points, for: Fx.alice)
+        edited.setInputMethod(.points, for: Fx.alice)
+        #expect(edited.entry(for: Fx.alice) == fresh.entry(for: Fx.alice))
+
+        // Après correction de la grille, les deux brouillons suivent la même règle.
+        for index in [0, 1] {
+            var draft = index == 0 ? fresh : edited
+            draft.setInputMethod(.cards, for: Fx.alice)
+            try draft.setCard(-1, column: 1, row: 0, for: Fx.alice) // 1 → −1
+            draft.setInputMethod(.points, for: Fx.alice)
+            #expect(draft.entry(for: Fx.alice)?.points == 46)
+        }
+    }
+
+    @Test("Helpers de grille : participant inconnu, valeur ou position invalide refusés")
+    func gridHelpers() throws {
+        var draft = RoundDraft(index: 1, participants: Fx.players(2))
+        try draft.setCard(0, column: 2, row: 1, for: Fx.bob)
+        try draft.setColumnRemoved(true, column: 3, for: Fx.bob)
+        let grid = try #require(draft.entry(for: Fx.bob)?.cardGrid)
+        #expect(grid.columns[2][1] == 0)
+        #expect(grid.columns[3].isMarkedRemoved)
+
+        #expect(throws: ValidationError.unknownParticipant(pid(42))) {
+            try draft.setCard(1, column: 0, row: 0, for: pid(42))
+        }
+        #expect(throws: ValidationError.unknownParticipant(pid(42))) {
+            try draft.setColumnRemoved(true, column: 0, for: pid(42))
+        }
+        #expect(throws: ValidationError.cardValueOutOfRange(13)) {
+            try draft.setCard(13, column: 0, row: 0, for: Fx.bob)
+        }
+        #expect(throws: ValidationError.cardPositionOutOfRange(column: 9, row: 0)) {
+            try draft.setColumnRemoved(true, column: 9, for: Fx.bob)
+        }
+    }
+
+    // MARK: Analyse du texte saisi (arbitrage)
+
     @Test("Analyse du texte saisi", arguments: [
         ("", ParsedScore.empty),
         ("   ", ParsedScore.empty),
+        ("\u{00A0}\u{00A0}", ParsedScore.empty),
         ("0", ParsedScore.value(0)),
         ("-0", ParsedScore.value(0)),
         ("7", ParsedScore.value(7)),
         (" 12 ", ParsedScore.value(12)),
+        ("\u{00A0}12\u{00A0}", ParsedScore.value(12)),
         ("-5", ParsedScore.value(-5)),
         ("\u{2212}5", ParsedScore.value(-5)),
+        ("\u{2013}5", ParsedScore.value(-5)),
+        ("\u{FF0D}5", ParsedScore.value(-5)),
         ("+3", ParsedScore.value(3)),
+        ("\u{2212} 5", ParsedScore.value(-5)),
+        ("- 5", ParsedScore.value(-5)),
+        ("-\u{00A0}5", ParsedScore.value(-5)),
+        ("+ 3", ParsedScore.value(3)),
+        (" \u{2013} 12 ", ParsedScore.value(-12)),
+        ("-9223372036854775808", ParsedScore.value(Int.min)),
+        ("9223372036854775807", ParsedScore.value(Int.max)),
         ("12a", ParsedScore.invalid),
         ("--3", ParsedScore.invalid),
+        ("- -3", ParsedScore.invalid),
+        ("+-3", ParsedScore.invalid),
         ("1.5", ParsedScore.invalid),
         ("1 2", ParsedScore.invalid),
+        ("1\u{00A0}2", ParsedScore.invalid),
+        ("5-", ParsedScore.invalid),
         ("-", ParsedScore.invalid),
+        ("\u{2212}", ParsedScore.invalid),
         ("\u{0663}", ParsedScore.invalid),
+        ("\u{FF15}", ParsedScore.invalid),
+        ("9223372036854775808", ParsedScore.invalid),
+        ("-9223372036854775809", ParsedScore.invalid),
         ("99999999999999999999", ParsedScore.invalid),
     ])
     func parseScore(text: String, expected: ParsedScore) {

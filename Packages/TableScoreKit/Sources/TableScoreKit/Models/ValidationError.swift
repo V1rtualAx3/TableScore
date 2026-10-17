@@ -23,7 +23,10 @@ public enum ValidationError: Error, Sendable, Hashable {
     // Historique
     case roundIndexMismatch(expected: Int, found: Int)
     case duplicateRoundID(UUID)
+    case unknownRound(UUID)
     case gameAlreadyFinished(atRoundIndex: Int)
+    /// Erreur survenue en recalculant la manche `index` de l'historique (entrées, grille, cumul).
+    indirect case invalidRound(index: Int, reason: ValidationError)
 
     // Grille de cartes
     case invalidGridShape
@@ -34,4 +37,10 @@ public enum ValidationError: Error, Sendable, Hashable {
 
     // Arithmétique : dépassement de capacité d'`Int` (doublement ou cumul).
     case arithmeticOverflow(participantID: UUID)
+
+    /// Cause élémentaire, sans le contexte de manche.
+    public var underlyingReason: ValidationError {
+        if case .invalidRound(_, let reason) = self { return reason.underlyingReason }
+        return self
+    }
 }
