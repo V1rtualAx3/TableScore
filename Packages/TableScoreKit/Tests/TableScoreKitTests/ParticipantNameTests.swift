@@ -25,13 +25,47 @@ struct ParticipantNameTests {
         try ScoreEngine.validate(participants: players(bobName: "   " + String(repeating: "b", count: 24) + "  "))
     }
 
-    @Test("Graphèmes : un émoji composé compte pour un caractère")
+    @Test("Graphèmes : une lettre + accent combinant compte pour un caractère")
     func graphemesCountAsOne() throws {
-        let family = "👨‍👩‍👧"
-        #expect(family.count == 1)
-        try ScoreEngine.validate(participants: players(bobName: String(repeating: family, count: 24)))
+        // « e » + U+0301 : 1 graphème, 3 octets UTF-8 ⇒ 24 × 3 = 72 octets (< 256).
+        let accented = "e\u{0301}"
+        #expect(accented.count == 1)
+        #expect(accented.utf8.count == 3)
+        try ScoreEngine.validate(participants: players(bobName: String(repeating: accented, count: 24)))
         #expect(throws: ValidationError.participantNameTooLong(participantID: Fx.bob, maxLength: 24)) {
-            try ScoreEngine.validate(participants: players(bobName: String(repeating: family, count: 25)))
+            try ScoreEngine.validate(participants: players(bobName: String(repeating: accented, count: 25)))
+        }
+
+        // Drapeau : 2 indicateurs régionaux de 4 octets = 8 octets, 1 graphème ⇒ 24 × 8 = 192 octets.
+        let flag = "🇫🇷"
+        #expect(flag.count == 1)
+        #expect(flag.utf8.count == 8)
+        try ScoreEngine.validate(participants: players(bobName: String(repeating: flag, count: 24)))
+        #expect(throws: ValidationError.participantNameTooLong(participantID: Fx.bob, maxLength: 24)) {
+            try ScoreEngine.validate(participants: players(bobName: String(repeating: flag, count: 25)))
+        }
+    }
+
+    @Test("Émoji famille : 1 graphème mais 18 octets ⇒ la borne en octets s'applique avant 24 graphèmes")
+    func familyEmojiHitsByteLimit() throws {
+        // U+1F468 (4) + U+200D (3) + U+1F469 (4) + U+200D (3) + U+1F467 (4) = 18 octets.
+        let family = "👨\u{200D}👩\u{200D}👧"
+        #expect(family.count == 1)
+        #expect(family.unicodeScalars.count == 5)
+        #expect(family.utf8.count == 18)
+
+        // 14 × 18 = 252 octets ≤ 256 et 14 graphèmes ≤ 24 ⇒ accepté.
+        let fourteen = String(repeating: family, count: 14)
+        #expect(fourteen.count == 14)
+        #expect(fourteen.utf8.count == 252)
+        try ScoreEngine.validate(participants: players(bobName: fourteen))
+
+        // 15 × 18 = 270 octets > 256, alors que 15 graphèmes ≤ 24 ⇒ refusé pour cause d'octets.
+        let fifteen = String(repeating: family, count: 15)
+        #expect(fifteen.count == 15)
+        #expect(fifteen.utf8.count == 270)
+        #expect(throws: ValidationError.participantNameTooLong(participantID: Fx.bob, maxLength: 24)) {
+            try ScoreEngine.validate(participants: players(bobName: fifteen))
         }
     }
 
