@@ -41,3 +41,15 @@ struct AppConfigurationTests {
         _ = HomeView()
     }
 }
+
+#if !DEBUG
+/// Sentinelle : hors configuration Debug, les suites `#if DEBUG` (fixtures `UITestSeed`, modèles
+/// testés via dépôt en mémoire) ne sont pas compilées. Ce test échoue volontairement pour que
+/// le silence de ces suites ne passe pas pour un succès.
+struct DebugOnlySuitesSentinelTests {
+    @Test("Configuration non-Debug : les suites DEBUG-only sont ignorées")
+    func debugOnlySuitesAreSkipped() {
+        Issue.record("Build non-Debug : les suites de tests DEBUG-only ne sont pas exécutées. Lancer les tests en Debug.")
+    }
+}
+#endif

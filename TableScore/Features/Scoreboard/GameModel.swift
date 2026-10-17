@@ -39,6 +39,11 @@ final class GameModel {
     private(set) var banner: Banner?
     /// Incrémenté à chaque nouvelle manche détectée (déclencheur de l'haptique).
     private(set) var savedRoundCount = 0
+    /// Vrai si l'échec de chargement est « partie introuvable » (sinon : message générique du dépôt).
+    private(set) var loadFailureIsNotFound = false
+    /// Incrémenté une seule fois par modèle quand l'écran de fin est annoncé (haptique unique).
+    private(set) var endFeedbackCount = 0
+    private var hasAnnouncedEnd = false
     /// Erreur d'une action (rejouer, abandonner), affichée dans une alerte.
     var actionError: String?
 
@@ -62,8 +67,13 @@ final class GameModel {
             game = loaded
             loadState = .loaded
             let count = loaded.computation.rounds.count
+            loadFailureIsNotFound = false
             if let previousCount {
-                if count > previousCount, let last = loaded.computation.rounds.last {
+                if loaded.isOver {
+                    // La fin de partie remplace bannière et haptique « manche enregistrée » :
+                    // une seule annonce VoiceOver et une seule haptique (écran de fin).
+                    banner = nil
+                } else if count > previousCount, let last = loaded.computation.rounds.last {
                     banner = makeBanner(for: last, in: loaded)
                     savedRoundCount += 1
                 } else if count < previousCount {
@@ -74,6 +84,7 @@ final class GameModel {
             let repositoryError = GameRepositoryError.from(error, operation: .read)
             game = nil
             banner = nil
+            if case .gameNotFound = repositoryError { loadFailureIsNotFound = true } else { loadFailureIsNotFound = false }
             loadState = .failed(message: repositoryError.userFacingMessage)
         }
     }
@@ -90,7 +101,7 @@ final class GameModel {
             let name = closer.displayName
             let raw = ScoreFormat.display(summary.scoring.closingRawScore)
             let effective = ScoreFormat.display(summary.scoring.closingEffectiveScore)
-            detail = String(localized: "\(name) : score doublé (\(raw) → \(effective))")
+            detail = String(localized: "\(name)\u{00A0}: score doublé (\(raw) → \(effective))")
         }
         return Banner(message: message, detail: detail)
     }
@@ -98,6 +109,30 @@ final class GameModel {
     // MARK: Affichage
 
     var isOver: Bool { game?.isOver ?? false }
+
+    /// Écran de fin complet (vainqueurs + tableau final) : partie terminée et lisible par `GameOverSummary`.
+    /// Les lignes de score et le classement sont alors masqués (un seul tableau : `standingsAtEnd`).
+    var showsFinalResults: Bool {
+        guard let game else { return false }
+        return GameOverSummary(game: game) != nil
+    }
+
+    /// `true` une seule fois par modèle, quand l'écran de fin est affiché (annonce + haptique uniques).
+    func consumeEndAnnouncement() -> Bool {
+        guard showsFinalResults, !hasAnnouncedEnd else { return false }
+        hasAnnouncedEnd = true
+        endFeedbackCount += 1
+        return true
+    }
+
+    /// « Historique (3 manches) » ; `nil` sans manche (le lien est masqué).
+    var historyLinkTitle: String? {
+        switch roundCount {
+        case 0: nil
+        case 1: String(localized: "Historique (1 manche)")
+        default: String(localized: "Historique (\(roundCount) manches)")
+        }
+    }
 
     /// Une nouvelle manche n'est proposée que pour une partie active que le moteur juge en cours.
     var canAddRound: Bool {

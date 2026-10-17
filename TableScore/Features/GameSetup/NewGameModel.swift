@@ -36,7 +36,7 @@ final class NewGameModel {
             case .invalidCharacters:
                 "Ce prénom contient un caractère non autorisé."
             case .duplicate(let name):
-                "Deux joueurs s'appellent « \(name) » : ajoutez une initiale."
+                "Deux joueurs s'appellent «\u{00A0}\(name)\u{00A0}»\u{00A0}: ajoutez une initiale."
             }
         }
     }
@@ -78,15 +78,31 @@ final class NewGameModel {
         return draft.id
     }
 
+    /// Supprime les lignes données (sans effet si moins de deux joueurs resteraient).
+    /// Implémentation pure (sans SwiftUI) : indices hors limites ignorés.
     func remove(atOffsets offsets: IndexSet) {
         var remaining = players
-        remaining.remove(atOffsets: offsets)
+        for index in offsets.reversed() where remaining.indices.contains(index) {
+            remaining.remove(at: index)
+        }
         guard remaining.count >= Self.playerRange.lowerBound else { return }
         players = remaining
     }
 
+    /// Déplace des lignes (même sémantique que `move(fromOffsets:toOffset:)` de SwiftUI :
+    /// `destination` est un indice d'insertion dans le tableau d'origine).
     func move(from source: IndexSet, to destination: Int) {
-        players.move(fromOffsets: source, toOffset: destination)
+        let valid = source.filter { players.indices.contains($0) }
+        guard !valid.isEmpty else { return }
+        let target = min(max(destination, 0), players.count)
+        let moving = valid.map { players[$0] }
+        var result = players
+        for index in valid.reversed() { result.remove(at: index) }
+        let insertionIndex = target - valid.filter { $0 < target }.count
+        for (offset, player) in moving.enumerated() {
+            result.insert(player, at: insertionIndex + offset)
+        }
+        players = result
     }
 
     /// Rang 1-based affiché (« Prénom du joueur 1 »).
@@ -177,6 +193,13 @@ final class NewGameModel {
 
     // MARK: Règles
 
+    /// Réglage affiché « Doubler le score du clôturant » (activé = règle officielle).
+    /// Désactivé ⇒ `HouseRules.isCloserPenaltyDisabled`.
+    var doublesCloserScore: Bool {
+        get { !isCloserPenaltyDisabled }
+        set { isCloserPenaltyDisabled = !newValue }
+    }
+
     var rules: GameRules {
         GameRules(
             targetScore: targetScore,
@@ -186,7 +209,7 @@ final class NewGameModel {
 
     var rulesSummary: String {
         var summary = "Skyjo classique · \(targetScore) points"
-        if isCloserPenaltyDisabled { summary += " · sans pénalité du clôturant" }
+        if isCloserPenaltyDisabled { summary += " · sans doublement du clôturant" }
         return summary
     }
 

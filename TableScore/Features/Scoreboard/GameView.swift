@@ -1,3 +1,4 @@
+import Accessibility
 import SwiftUI
 
 /// Tableau des scores de la partie (docs/ux/lot2-parcours.md §2.3). Destination de `Route.game`.
@@ -31,6 +32,7 @@ private struct GameContentView: View {
     @Bindable var model: GameModel
 
     @Environment(AppRouter.self) private var router
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(AppPreferenceKey.hapticsEnabled) private var hapticsEnabled = true
     @State private var isConfirmingAbandon = false
 
@@ -51,13 +53,20 @@ private struct GameContentView: View {
         .toolbar {
             if model.loadState == .loaded {
                 ToolbarItem(placement: .principal) {
-                    VStack(spacing: 0) {
-                        Text(model.headerTitle).font(.headline)
-                        Text(model.headerSubtitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if model.showsFinalResults {
+                        // Le titre « Partie terminée » est dans l'écran de fin : pas de doublon dans la barre.
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .accessibilityHidden(true)
+                    } else {
+                        VStack(spacing: 0) {
+                            Text(model.headerTitle).font(.headline)
+                            Text(model.headerSubtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
                     }
-                    .accessibilityElement(children: .combine)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     optionsMenu
@@ -65,7 +74,7 @@ private struct GameContentView: View {
             }
         }
         .confirmationDialog(
-            "Abandonner la partie ?",
+            "Abandonner la partie\u{202F}?",
             isPresented: $isConfirmingAbandon,
             titleVisibility: .visible
         ) {
@@ -93,6 +102,16 @@ private struct GameContentView: View {
         .sensoryFeedback(trigger: model.savedRoundCount) { _, _ in
             hapticsEnabled ? .success : nil
         }
+        .sensoryFeedback(trigger: model.endFeedbackCount) { _, _ in
+            hapticsEnabled ? .success : nil
+        }
+        .task(id: model.showsFinalResults) {
+            // Fin de partie : une seule annonce et une seule haptique, au premier affichage.
+            guard model.consumeEndAnnouncement(),
+                  let game = model.game,
+                  let summary = GameOverSummary(game: game) else { return }
+            AccessibilityNotification.Announcement(summary.spokenSummary).post()
+        }
         .task(id: model.banner) {
             guard let banner = model.banner else { return }
             AccessibilityNotification.Announcement(
@@ -115,6 +134,12 @@ private struct GameContentView: View {
                     }
                     .accessibilityIdentifier(AccessibilityID.Game.addRound)
                 }
+        } else if model.showsFinalResults {
+            scoreboardScroll
+                .primaryActionInset {
+                    PrimaryActionButton("Rejouer avec les mêmes joueurs") { replay() }
+                        .accessibilityIdentifier(AccessibilityID.GameOver.replay)
+                }
         } else {
             scoreboardScroll
         }
@@ -123,31 +148,39 @@ private struct GameContentView: View {
     private var scoreboardScroll: some View {
         ScrollView {
             LazyVStack(spacing: Theme.Spacing.s) {
-                if let banner = model.banner {
-                    bannerView(banner)
-                }
                 if model.hasInconsistency {
                     inconsistencyBanner
                 }
-                if model.isOver, let game = model.game {
-                    GameOverSection(game: game, onReplay: replay)
+                if model.showsFinalResults, let game = model.game {
+                    // Un seul tableau final (`standingsAtEnd`) : ni lignes de score ni classement.
+                    GameOverSection(game: game)
+                } else {
+                    if model.roundCount == 0 {
+                        Text("Aucune manche pour l'instant. Les totaux apparaîtront ici.")
+                            .font(Theme.Typography.detail)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Theme.Spacing.xs)
+                    }
+                    ForEach(model.rows) { row in
+                        PlayerScoreRow(row: row)
+                    }
+                    standingsSection
+                    historyLink
                 }
-                if model.roundCount == 0 {
-                    Text("Aucune manche pour l'instant. Les totaux apparaîtront ici.")
-                        .font(Theme.Typography.detail)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, Theme.Spacing.xs)
-                }
-                ForEach(model.rows) { row in
-                    PlayerScoreRow(row: row)
-                }
-                standingsSection
-                historyLink
             }
             .padding(.horizontal, Theme.Spacing.l)
             .padding(.vertical, Theme.Spacing.m)
         }
+        .overlay(alignment: .top) {
+            // Bannière hors du défilement : visible sans quitter le haut de l'écran.
+            if let banner = model.banner {
+                bannerView(banner)
+                    .padding(.horizontal, Theme.Spacing.l)
+                    .padding(.top, Theme.Spacing.s)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: model.banner)
     }
 
     private func bannerView(_ banner: GameModel.Banner) -> some View {
@@ -162,9 +195,10 @@ private struct GameContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.Spacing.m)
         .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.row))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.row).strokeBorder(Color.secondary.opacity(0.35)))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(AccessibilityID.Game.banner)
-        .transition(.opacity)
+        .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
     }
 
     private var inconsistencyBanner: some View {
@@ -211,12 +245,19 @@ private struct GameContentView: View {
         }
     }
 
+    @ViewBuilder
     private var historyLink: some View {
+        if let title = model.historyLinkTitle {
+            historyButton(title)
+        }
+    }
+
+    private func historyButton(_ title: String) -> some View {
         Button {
             router.show(.history(model.gameID))
         } label: {
             HStack {
-                Text("Historique (\(model.roundCount) manches)")
+                Text(title)
                 Spacer(minLength: Theme.Spacing.s)
                 Image(systemName: "chevron.right")
                     .foregroundStyle(.secondary)
@@ -264,7 +305,12 @@ private struct GameContentView: View {
 
     private func failureView(message: String) -> some View {
         ContentUnavailableView {
-            Label("Partie introuvable", systemImage: Theme.Symbol.warning)
+            Label(
+                model.loadFailureIsNotFound
+                    ? String(localized: "Partie introuvable")
+                    : String(localized: "Impossible de charger la partie"),
+                systemImage: Theme.Symbol.warning
+            )
         } description: {
             Text(message)
         } actions: {

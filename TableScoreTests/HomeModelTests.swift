@@ -29,6 +29,10 @@ private final class UnreadableRepository: GameRepository {
     func reopenGame(id: UUID) throws(GameRepositoryError) -> SavedGame { throw error }
     func archiveGame(id: UUID) throws(GameRepositoryError) -> SavedGame { throw error }
     func deleteGame(id: UUID) throws(GameRepositoryError) -> Bool { throw error }
+    func deleteAllGames() throws(GameRepositoryError) { throw error }
+    func deleteRoundsAfterEarlyEnd(
+        gameID: UUID, confirmedRoundIDs: [UUID]
+    ) throws(GameRepositoryError) -> SavedGame { throw error }
 }
 
 @Suite("Accueil : état et textes")
@@ -147,9 +151,9 @@ struct HomeModelTests {
     @Test("Dernier enregistrement : « à l'instant » sous la minute, relatif au-delà")
     func lastSavedText() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        #expect(HomeModel.lastSavedText(updatedAt: now.addingTimeInterval(-20), now: now) == "modifiée à l'instant")
+        #expect(HomeModel.lastSavedText(updatedAt: now.addingTimeInterval(-20), now: now) == "Modifiée à l'instant")
         let older = HomeModel.lastSavedText(updatedAt: now.addingTimeInterval(-300), now: now)
-        #expect(older.hasPrefix("modifiée "))
-        #expect(older != "modifiée à l'instant")
+        #expect(older.hasPrefix("Modifiée "))
+        #expect(older != "Modifiée à l'instant")
     }
 }

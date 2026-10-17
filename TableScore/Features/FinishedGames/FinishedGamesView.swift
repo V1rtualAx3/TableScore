@@ -54,7 +54,7 @@ struct FinishedGamesView: View {
             }
         }
         .confirmationDialog(
-            "Supprimer définitivement cette partie ?",
+            "Supprimer définitivement cette partie\u{202F}?",
             isPresented: Binding(
                 get: { model.pendingDeletionID != nil },
                 set: { isPresented in if !isPresented { model.cancelDeletion() } }
@@ -97,9 +97,11 @@ struct FinishedGamesView: View {
         }
         .accessibilityIdentifier(AccessibilityID.FinishedGames.game(position: position))
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button("Supprimer", role: .destructive) {
+            // Pas de `role: .destructive` : la ligne ne disparaît pas avant la confirmation.
+            Button("Supprimer") {
                 model.requestDeletion(of: row.id)
             }
+            .tint(.red)
         }
         .contextMenu {
             Button("Supprimer", role: .destructive) {
@@ -120,7 +122,7 @@ private struct FinishedGameRowContent: View {
         HStack(spacing: Theme.Spacing.m) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 HStack(spacing: Theme.Spacing.s) {
-                    Text(row.date, format: .dateTime.day().month(.abbreviated).year().hour().minute())
+                    Text(row.date, format: .dateTime.day().month(.abbreviated).year().hour().minute().locale(Theme.locale))
                         .font(.headline)
                     StatusTag(kind: row.kind)
                 }
@@ -149,17 +151,21 @@ private struct FinishedGameRowContent: View {
     }
 
     private var playersText: String {
-        row.playerNames.formatted(.list(type: .and, width: .standard))
+        row.playerNames.formatted(.list(type: .and, width: .standard).locale(Theme.locale))
     }
 
     private var winnersText: String? {
         guard row.kind == .finished, !row.winnerNames.isEmpty else { return nil }
-        let names = row.winnerNames.formatted(.list(type: .and, width: .standard))
-        return row.hasCoWinners ? "Co-vainqueurs : \(names)" : "Vainqueur : \(names)"
+        let names = row.winnerNames.formatted(.list(type: .and, width: .standard).locale(Theme.locale))
+        return row.hasCoWinners
+            ? String(localized: "Co-vainqueurs\u{00A0}: \(names)")
+            : String(localized: "Vainqueur\u{00A0}: \(names)")
     }
 
     private var roundsText: String {
-        row.roundCount == 1 ? "1 manche" : "\(row.roundCount) manches"
+        row.roundCount <= 1
+            ? String(localized: "\(row.roundCount) manche")
+            : String(localized: "\(row.roundCount) manches")
     }
 }
 
@@ -168,9 +174,14 @@ private struct StatusTag: View {
     let kind: FinishedGameRow.Kind
 
     var body: some View {
-        Label(title, systemImage: symbol)
+        // Texte en `.primary` (contraste) ; la couleur d'alerte ne porte que l'icône.
+        Label {
+            Text(title).foregroundStyle(.primary)
+        } icon: {
+            Image(systemName: symbol)
+                .foregroundStyle(kind == .finished ? Color.primary : Theme.Palette.warning)
+        }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(kind == .finished ? Color.primary : Theme.Palette.warning)
             .padding(.horizontal, Theme.Spacing.s)
             .padding(.vertical, Theme.Spacing.xs)
             .background(Theme.Palette.surface, in: Capsule())

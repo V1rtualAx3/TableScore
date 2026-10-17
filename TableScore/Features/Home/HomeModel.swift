@@ -79,14 +79,15 @@ final class HomeModel {
         return "\(players) · \(rounds)"
     }
 
-    /// « modifiée il y a 5 minutes » ; « modifiée à l'instant » sous la minute.
+    /// « Modifiée il y a 5 minutes » ; « Modifiée à l'instant » sous la minute (toujours en français).
     static func lastSavedText(updatedAt: Date, now: Date = Date()) -> String {
         guard abs(now.timeIntervalSince(updatedAt)) >= 60 else {
-            return String(localized: "modifiée à l'instant")
+            return String(localized: "Modifiée à l'instant")
         }
         let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Theme.locale
         formatter.unitsStyle = .full
         let relative = formatter.localizedString(for: updatedAt, relativeTo: now)
-        return String(localized: "modifiée \(relative)")
+        return String(localized: "Modifiée \(relative)")
     }
 }

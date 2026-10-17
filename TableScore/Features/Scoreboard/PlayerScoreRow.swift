@@ -68,7 +68,7 @@ struct PlayerScoreRow: View {
             .background(Theme.Palette.leader.opacity(0.15), in: Capsule())
         }
         if let gap = row.gapToLeader, gap > 0 {
-            Text(ScoreFormat.delta(gap))
+            Text(Self.gapText(gap))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
         }
@@ -84,6 +84,18 @@ struct PlayerScoreRow: View {
         rank == 1 ? String(localized: "première place") : String(localized: "\(rank)e place")
     }
 
+    /// Écart affiché : « +12\u{00A0}pts ».
+    static func gapText(_ gap: Int) -> String {
+        ScoreFormat.delta(gap) + "\u{00A0}" + String(localized: "pts")
+    }
+
+    /// Écart lu par VoiceOver : « 12 points de plus que le premier ».
+    static func spokenGap(_ gap: Int) -> String {
+        gap == 1
+            ? String(localized: "1 point de plus que le premier")
+            : String(localized: "\(gap) points de plus que le premier")
+    }
+
     private var accessibilityText: String {
         var parts = [
             row.name,
@@ -93,7 +105,7 @@ struct PlayerScoreRow: View {
         if row.isLeader {
             parts.append(String(localized: "en tête"))
         } else if let gap = row.gapToLeader, gap > 0 {
-            parts.append(String(localized: "\(gap) points derrière la tête"))
+            parts.append(Self.spokenGap(gap))
         }
         return parts.joined(separator: ", ")
     }

@@ -88,11 +88,20 @@ final class SecondaryScreensUITests: XCTestCase {
         delete.tap()
         XCTAssertTrue(app.buttons["Continuer"].waitForExistence(timeout: 5))
         app.buttons["Continuer"].tap()
+        // L'alerte est présentée après la fermeture de la boîte de dialogue (court délai volontaire).
         let finalAlert = app.alerts["Dernière confirmation"]
-        XCTAssertTrue(finalAlert.waitForExistence(timeout: 5))
-        finalAlert.buttons["Tout supprimer"].tap()
+        XCTAssertTrue(finalAlert.waitForExistence(timeout: 10), "La dernière confirmation doit apparaître.")
+        let confirmAll = finalAlert.buttons["Tout supprimer"]
+        XCTAssertTrue(confirmAll.waitForExistence(timeout: 5))
+        confirmAll.tap()
+        XCTAssertTrue(
+            finalAlert.waitForNonExistence(timeout: 5),
+            "L'alerte doit se refermer après la suppression."
+        )
 
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
         XCTAssertTrue(app.buttons["home.newGame"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["home.resume"].exists, "Plus aucune partie à reprendre.")
     }

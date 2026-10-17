@@ -16,7 +16,7 @@ final class LaunchTests: XCTestCase {
             "Le titre de l'écran d'accueil doit apparaître."
         )
         XCTAssertTrue(
-            app.buttons["home.newGame"].exists,
+            app.buttons["home.newGame"].waitForExistence(timeout: 5),
             "L'action principale « Nouvelle partie » doit être présente."
         )
     }

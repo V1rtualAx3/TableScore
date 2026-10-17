@@ -42,9 +42,10 @@ final class HomeUITests: XCTestCase {
         waitForHome(app)
 
         app.buttons["home.newGame"].tap()
-        let confirm = app.buttons["Abandonner et commencer"]
+        let confirm = app.buttons["Continuer"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["setup.start"].exists, "Rien ne démarre avant confirmation.")
+        XCTAssertFalse(app.buttons["Abandonner et commencer"].exists, "Le libellé ne promet plus un abandon immédiat.")
 
         // Annuler laisse la partie intacte.
         app.buttons["Annuler"].firstMatch.tap()
@@ -64,6 +65,8 @@ final class HomeUITests: XCTestCase {
         app.launchArguments = ["-uiTesting", "-uiTestingPersistentStore", "-resetUITestStore"]
         app.launch()
         waitForHome(app)
+        // Attendre l'état « vide » (action de création) avant de constater l'absence de « reprendre ».
+        XCTAssertTrue(app.buttons["home.newGame"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["home.resume"].exists, "Le store dédié doit démarrer vide.")
 
         app.buttons["home.newGame"].tap()

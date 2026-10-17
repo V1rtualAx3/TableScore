@@ -1,3 +1,4 @@
+import Accessibility
 import SwiftUI
 
 /// Paramètres minimaux (docs/ux/lot2-parcours.md §2.8) : haptique, suppression globale, à propos.
@@ -6,6 +7,9 @@ struct SettingsView: View {
     @Environment(AppRouter.self) private var router
     @AppStorage(AppPreferenceKey.hapticsEnabled) private var hapticsEnabled = true
     @State private var model: SettingsModel?
+    /// Présentation de l'alerte finale, découplée du modèle : elle n'apparaît qu'après la fermeture
+    /// de la boîte de dialogue (deux présentations simultanées sont ignorées par SwiftUI).
+    @State private var isLastConfirmationPresented = false
 
     var body: some View {
         Group {
@@ -41,7 +45,7 @@ struct SettingsView: View {
                 .accessibilityIdentifier(AccessibilityID.Settings.deleteAllData)
                 .frame(minHeight: Theme.Size.minTapTarget, alignment: .leading)
                 .confirmationDialog(
-                    "Supprimer toutes les données ?",
+                    "Supprimer toutes les données\u{202F}?",
                     isPresented: Binding(
                         get: { model.deletionStep == .first },
                         set: { isPresented in
@@ -88,11 +92,23 @@ struct SettingsView: View {
                 AccessibilityNotification.Announcement("Toutes les données ont été supprimées.").post()
             }
         }
+        .onChange(of: model.deletionStep) { _, step in
+            if step == .lastConfirmation {
+                Task { @MainActor in
+                    // Laisse la boîte de dialogue se refermer avant de présenter l'alerte.
+                    try? await Task.sleep(for: .milliseconds(400))
+                    if model.deletionStep == .lastConfirmation { isLastConfirmationPresented = true }
+                }
+            } else {
+                isLastConfirmationPresented = false
+            }
+        }
         .alert(
             "Dernière confirmation",
             isPresented: Binding(
-                get: { model.deletionStep == .lastConfirmation },
+                get: { isLastConfirmationPresented },
                 set: { isPresented in
+                    isLastConfirmationPresented = isPresented
                     if !isPresented && model.deletionStep == .lastConfirmation { model.cancelDeletion() }
                 }
             )

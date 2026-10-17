@@ -3,15 +3,14 @@ import SwiftUI
 /// Fin de partie, intégrée en tête du tableau des scores par `GameView` (docs/ux/lot2-parcours.md §2.3).
 ///
 /// Vainqueur(s), rangs et totaux viennent de `GameOverSummary` (lecture de `GameComputation`).
-/// « Rejouer » : `onReplay()` (la création est faite par le modèle de `GameView`).
+/// « Rejouer » est dans la zone d'action fixe de `GameView` ; l'annonce VoiceOver et l'haptique de fin
+/// (uniques, au premier affichage) sont aussi pilotées par `GameView`.
 struct GameOverSection: View {
     let game: SavedGame
-    let onReplay: () -> Void
 
     @Environment(AppRouter.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @AppStorage(AppPreferenceKey.hapticsEnabled) private var hapticsEnabled = true
     @State private var hasAppeared = false
 
     private var summary: GameOverSummary? { GameOverSummary(game: game) }
@@ -32,17 +31,12 @@ struct GameOverSection: View {
         }
         .padding(Theme.Spacing.l)
         .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
-        .sensoryFeedback(trigger: hasAppeared) { _, appeared in
-            (appeared && hapticsEnabled) ? .success : nil
-        }
         .task {
+            guard !hasAppeared else { return }
             if reduceMotion {
                 hasAppeared = true
             } else {
                 withAnimation(.easeOut(duration: 0.5)) { hasAppeared = true }
-            }
-            if let summary {
-                AccessibilityNotification.Announcement(summary.spokenSummary).post()
             }
         }
     }
@@ -74,7 +68,9 @@ struct GameOverSection: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(summary.spokenWinners)
                 .accessibilityIdentifier(AccessibilityID.GameOver.winners)
-            Text("Après \(summary.roundCount) manches")
+            Text(summary.roundCount == 1
+                ? String(localized: "Après 1 manche")
+                : String(localized: "Après \(summary.roundCount) manches"))
                 .font(Theme.Typography.detail)
                 .foregroundStyle(.secondary)
         }
@@ -96,9 +92,13 @@ struct GameOverSection: View {
                 .fontWeight(line.isWinner ? .bold : .regular)
                 .lineLimit(2)
             if line.isWinner {
-                Label("Vainqueur", systemImage: Theme.Symbol.leader)
-                    .font(.caption.bold())
-                    .foregroundStyle(Theme.Palette.leader)
+                // Texte lisible (.primary) ; la couleur ne porte que l'icône.
+                Label {
+                    Text("Vainqueur").foregroundStyle(.primary)
+                } icon: {
+                    Image(systemName: Theme.Symbol.leader).foregroundStyle(Theme.Palette.leader)
+                }
+                .font(.caption.bold())
             }
         }
         Group {
@@ -127,8 +127,6 @@ struct GameOverSection: View {
 
     private var actions: some View {
         VStack(spacing: Theme.Spacing.s) {
-            PrimaryActionButton("Rejouer avec les mêmes joueurs", action: onReplay)
-                .accessibilityIdentifier(AccessibilityID.GameOver.replay)
             Button {
                 router.show(.history(game.id))
             } label: {

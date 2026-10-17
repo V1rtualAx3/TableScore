@@ -70,6 +70,7 @@ struct GameModelTests {
             return
         }
         #expect(!message.isEmpty)
+        #expect(model.loadFailureIsNotFound)
         #expect(model.rows.isEmpty)
         #expect(!model.canAddRound)
     }
@@ -105,6 +106,74 @@ struct GameModelTests {
         #expect(model.banner == nil)
         model.load()
         #expect(model.banner == nil, "Un rechargement sans nouvelle manche ne recrée pas la bannière.")
+    }
+
+    @Test("Fin de partie par une nouvelle manche : ni bannière ni haptique de manche, annonce unique")
+    func finishingRoundReplacesBanner() throws {
+        let (model, repository) = try makeModel(.nearEnd)
+        #expect(!model.showsFinalResults)
+        #expect(!model.consumeEndAnnouncement())
+        let key = UITestSeed.GameKey.nearEnd
+        let ids = (0..<3).map { key.participantID(position: $0) }
+        // Alice (88) clôt avec 12 : 100 points, seuil atteint ; pas de doublement (plus petit score).
+        let round = RoundInput(
+            id: UUID(),
+            index: 4,
+            closingParticipantID: ids[0],
+            entries: [
+                .points(ids[0], rawScore: 12),
+                .points(ids[1], rawScore: 20),
+                .points(ids[2], rawScore: 15),
+            ]
+        )
+        _ = try repository.appendRound(round, toGame: key.id)
+        model.load()
+
+        #expect(model.isOver)
+        #expect(model.banner == nil)
+        #expect(model.savedRoundCount == 0)
+        #expect(model.showsFinalResults)
+        #expect(model.consumeEndAnnouncement())
+        #expect(!model.consumeEndAnnouncement(), "L'annonce de fin n'a lieu qu'une fois.")
+        #expect(model.endFeedbackCount == 1)
+        model.load()
+        #expect(!model.consumeEndAnnouncement(), "Un rechargement ne redéclenche pas l'annonce.")
+    }
+
+    @Test("Partie terminée ouverte directement : écran de fin annoncé une seule fois")
+    func finishedGameAnnouncedOnce() throws {
+        let (model, _) = try makeModel(.tieEnd)
+        #expect(model.showsFinalResults)
+        #expect(model.consumeEndAnnouncement())
+        #expect(!model.consumeEndAnnouncement())
+        #expect(model.endFeedbackCount == 1)
+    }
+
+    @Test("Lien Historique : masqué sans manche, singulier à 1, pluriel ensuite")
+    func historyLinkTitle() throws {
+        let repository = InMemoryGameRepository()
+        let id = UUID()
+        let a = Participant(displayName: "Alice", displayOrder: 0)
+        let b = Participant(displayName: "Bob", displayOrder: 1)
+        _ = try repository.createGame(id: id, participants: [a, b], rules: .classic)
+        let model = GameModel(gameID: id, repository: repository)
+        model.load()
+        #expect(model.historyLinkTitle == nil)
+
+        _ = try repository.appendRound(
+            RoundInput(
+                id: UUID(),
+                index: 1,
+                closingParticipantID: a.id,
+                entries: [.points(a.id, rawScore: 4), .points(b.id, rawScore: 9)]
+            ),
+            toGame: id
+        )
+        model.load()
+        #expect(model.historyLinkTitle == "Historique (1 manche)")
+
+        let (nearEnd, _) = try makeModel(.nearEnd)
+        #expect(nearEnd.historyLinkTitle == "Historique (3 manches)")
     }
 
     @Test("Rejouer : mêmes prénoms, même ordre, mêmes règles, nouveaux identifiants, idempotent")

@@ -4,7 +4,14 @@ import SwiftUI
 /// s'adaptent au mode sombre et au contraste accru. Une couleur n'est jamais seule porteuse
 /// d'information : toujours un texte et/ou un symbole à côté.
 enum Theme {
+    /// Langue des textes d'interface (app française) : dates, durées relatives et listes
+    /// ne dépendent pas de la région de l'appareil.
+    static let locale = Locale(identifier: "fr_FR")
+
     enum Palette {
+        /// Teinte de l'app (`AccentColor`). Contraste WCAG avec le texte blanc des boutons
+        /// proéminents : clair `#1F6F78` = 5,83:1 ; sombre `#1B7A84` = 5,04:1 (≥ 4,5:1).
+        /// (Luminance relative sRGB : L = 0,2126 R + 0,7152 G + 0,0722 B linéarisés ; ratio = 1,05 / (L + 0,05).)
         static var accent: Color { .accentColor }
         /// Toujours accompagné de « En tête » + `Theme.Symbol.leader`.
         static var leader: Color { .green }

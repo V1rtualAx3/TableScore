@@ -56,7 +56,7 @@ private struct NewGameContent: View {
                     .accessibilityHint(model.startBlockReason ?? "")
             }
             .confirmationDialog(
-                "Abandonner la création ?",
+                "Abandonner la création\u{202F}?",
                 isPresented: $isConfirmingCancel,
                 titleVisibility: .visible
             ) {
@@ -111,7 +111,6 @@ private struct NewGameContent: View {
         return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             TextField("Prénom du joueur \(number)", text: player.name)
                 .focused($focusedID, equals: id)
-                .textContentType(.givenName)
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
                 .submitLabel(model.shouldFinishOnSubmit(id) ? .done : .next)
@@ -147,6 +146,8 @@ private struct NewGameContent: View {
                             }
                             .buttonStyle(.bordered)
                             .buttonBorderShape(.capsule)
+                            .controlSize(.large)
+                            .frame(minHeight: Theme.Size.minTapTarget)
                             .lineLimit(1)
                             .accessibilityLabel("Ajouter \(name)")
                         }
@@ -172,10 +173,11 @@ private struct NewGameContent: View {
                 }
                 .accessibilityIdentifier(AccessibilityID.Setup.targetScore)
 
-                Toggle("Pénalité du clôturant désactivée", isOn: Bindable(model).isCloserPenaltyDisabled)
+                Toggle("Doubler le score du clôturant", isOn: Bindable(model).doublesCloserScore)
+                    .accessibilityHint("Activé\u{00A0}: règle officielle. Désactivé\u{00A0}: variante maison, sans doublement.")
 
                 if model.isCloserPenaltyDisabled || model.targetScore != GameRules.officialTargetScore {
-                    Text("Variante non officielle : les scores suivront ces réglages.")
+                    Text("Variante non officielle\u{00A0}: les scores suivront ces réglages.")
                         .font(Theme.Typography.detail)
                         .foregroundStyle(.secondary)
                 }

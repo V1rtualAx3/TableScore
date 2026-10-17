@@ -43,6 +43,7 @@ struct ScoreText: View {
             .font(font)
             .monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(value)))
+            .animation(reduceMotion ? nil : .default, value: value)
             .accessibilityLabel(ScoreFormat.spoken(value))
     }
 }

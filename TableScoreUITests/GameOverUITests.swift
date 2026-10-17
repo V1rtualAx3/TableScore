@@ -29,6 +29,14 @@ final class GameOverUITests: XCTestCase {
         XCTAssertTrue(winners.label.contains("Chloé"), "Chloé est co-vainqueur : \(winners.label)")
         XCTAssertFalse(winners.label.contains("Alice"), "Alice (105) ne gagne pas.")
         XCTAssertFalse(app.buttons["game.addRound"].exists, "Plus de nouvelle manche après la fin.")
+        XCTAssertTrue(
+            app.buttons["gameOver.replay"].exists,
+            "« Rejouer avec les mêmes joueurs » remplace « Ajouter une manche » dans la zone d'action fixe."
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["game.player.0"].exists,
+            "Un seul tableau final : les lignes de score sont masquées."
+        )
     }
 
     @MainActor

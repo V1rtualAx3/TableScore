@@ -197,4 +197,45 @@ struct NewGameModelTests {
         #expect(model.players[1].name == "Bob")
         #expect(model.suggestions.isEmpty)
     }
+    // MARK: Réglage « Doubler le score du clôturant »
+
+    @Test("Doubler le score du clôturant : activé par défaut ; désactivé ⇒ règle maison")
+    func doublesCloserScoreToggle() {
+        let model = NewGameModel(repository: InMemoryGameRepository())
+        #expect(model.doublesCloserScore)
+        #expect(model.rules == GameRules.classic)
+
+        model.doublesCloserScore = false
+        #expect(model.isCloserPenaltyDisabled)
+        #expect(model.rules.houseRules?.isCloserPenaltyDisabled == true)
+        #expect(model.rulesSummary.contains("sans doublement du clôturant"))
+        #expect(model.hasUserInput)
+
+        model.doublesCloserScore = true
+        #expect(model.rules == GameRules.classic)
+    }
+
+    // MARK: Réordonnancement (sans SwiftUI)
+
+    @Test("Déplacement : même sémantique que move(fromOffsets:toOffset:)")
+    func movePlayers() {
+        let (model, _) = makeModel(names: ["A", "B", "C", "D"])
+        model.move(from: IndexSet(integer: 0), to: 3)
+        #expect(model.players.map(\.name) == ["B", "C", "A", "D"])
+        model.move(from: IndexSet(integer: 3), to: 0)
+        #expect(model.players.map(\.name) == ["D", "B", "C", "A"])
+        model.move(from: IndexSet([0, 1]), to: 4)
+        #expect(model.players.map(\.name) == ["C", "A", "D", "B"])
+        model.move(from: IndexSet(integer: 9), to: 0)
+        #expect(model.players.map(\.name) == ["C", "A", "D", "B"], "Indice hors limites ignoré.")
+    }
+
+    @Test("Suppression : plusieurs lignes, jamais sous deux joueurs")
+    func removePlayers() {
+        let (model, _) = makeModel(names: ["A", "B", "C", "D"])
+        model.remove(atOffsets: IndexSet([0, 2]))
+        #expect(model.players.map(\.name) == ["B", "D"])
+        model.remove(atOffsets: IndexSet(integer: 0))
+        #expect(model.players.count == 2, "Deux joueurs minimum.")
+    }
 }

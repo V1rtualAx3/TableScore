@@ -13,13 +13,13 @@ struct RulesView: View {
                 }
 
                 RulesSection(title: "Compter sa grille") {
-                    Text("On additionne les valeurs des cartes restantes. Un 0 ne rapporte rien, une carte négative fait baisser le score : le score d'une manche peut donc être nul ou négatif.")
+                    Text("On additionne les valeurs des cartes restantes. Un 0 ne rapporte rien, une carte négative fait baisser le score\u{00A0}: le score d'une manche peut donc être nul ou négatif.")
                 }
 
                 RulesSection(title: "Colonnes verticales identiques") {
                     Text("Quand les trois cartes d'une même colonne verticale sont identiques, la colonne est retirée et ne compte plus, même si la valeur est négative.")
-                    Text("Seules les colonnes verticales comptent : trois cartes identiques sur une ligne horizontale ne sont pas retirées. Une colonne ne se retire qu'une seule fois.")
-                    Text("En saisie directe des points, les colonnes sont déjà retirées à la table : l'application ne les retire pas une seconde fois.")
+                    Text("Seules les colonnes verticales comptent\u{00A0}: trois cartes identiques sur une ligne horizontale ne sont pas retirées. Une colonne ne se retire qu'une seule fois.")
+                    Text("En saisie directe des points, les colonnes sont déjà retirées à la table\u{00A0}: l'application ne les retire pas une seconde fois.")
                 }
 
                 RulesSection(title: "Le joueur qui termine la manche") {
@@ -39,7 +39,7 @@ struct RulesView: View {
 
                 RulesSection(title: "Fin de partie") {
                     Text("Une fois les scores de tous les joueurs ajoutés aux totaux, la partie s'arrête dès qu'un total atteint 100 points ou plus (ou le seuil choisi dans les règles maison). La manche en cours va toujours à son terme.")
-                    Text("Le plus petit total gagne. En cas d'égalité, les joueurs concernés sont co-vainqueurs : aucun départage n'est inventé.")
+                    Text("Le plus petit total gagne. En cas d'égalité, les joueurs concernés sont co-vainqueurs\u{00A0}: aucun départage n'est inventé.")
                 }
 
                 Text("Texte reformulé. En cas de doute, la notice de votre boîte de jeu fait foi.")
@@ -79,12 +79,12 @@ private struct RulesExample: Identifiable, Sendable {
     let cause: String
 
     static let all: [RulesExample] = [
-        RulesExample(id: 1, scores: "Alice 10, Bob 24, Chloé 10", closer: "Alice", retained: "20", cause: "égalité : score doublé"),
-        RulesExample(id: 2, scores: "Alice 10, Bob 11", closer: "Alice", retained: "10", cause: "seul plus petit score : pas de doublement"),
-        RulesExample(id: 3, scores: "Alice 12, Bob 9", closer: "Alice", retained: "24", cause: "Bob a fait moins : score doublé"),
-        RulesExample(id: 4, scores: "Alice \(ScoreFormat.display(-2)), Bob \(ScoreFormat.display(-4))", closer: "Alice", retained: ScoreFormat.display(-2), cause: "score négatif : jamais doublé"),
-        RulesExample(id: 5, scores: "Alice 0, Bob \(ScoreFormat.display(-1))", closer: "Alice", retained: "0", cause: "zéro : jamais doublé"),
-        RulesExample(id: 6, scores: "Alice \(ScoreFormat.display(-5)), Bob \(ScoreFormat.display(-5))", closer: "Alice", retained: ScoreFormat.display(-5), cause: "négatif malgré l'égalité : jamais doublé"),
+        RulesExample(id: 1, scores: "Alice 10, Bob 24, Chloé 10", closer: "Alice", retained: "20", cause: "égalité\u{00A0}: score doublé"),
+        RulesExample(id: 2, scores: "Alice 10, Bob 11", closer: "Alice", retained: "10", cause: "seul plus petit score\u{00A0}: pas de doublement"),
+        RulesExample(id: 3, scores: "Alice 12, Bob 9", closer: "Alice", retained: "24", cause: "Bob a fait moins\u{00A0}: score doublé"),
+        RulesExample(id: 4, scores: "Alice \(ScoreFormat.display(-2)), Bob \(ScoreFormat.display(-4))", closer: "Alice", retained: ScoreFormat.display(-2), cause: "score négatif\u{00A0}: jamais doublé"),
+        RulesExample(id: 5, scores: "Alice 0, Bob \(ScoreFormat.display(-1))", closer: "Alice", retained: "0", cause: "zéro\u{00A0}: jamais doublé"),
+        RulesExample(id: 6, scores: "Alice \(ScoreFormat.display(-5)), Bob \(ScoreFormat.display(-5))", closer: "Alice", retained: ScoreFormat.display(-5), cause: "négatif malgré l'égalité\u{00A0}: jamais doublé"),
     ]
 }
 
@@ -95,7 +95,7 @@ private struct ExampleRow: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(example.scores)
                 .font(.body.monospacedDigit())
-            Text("\(example.closer) termine : score retenu \(example.retained), \(example.cause).")
+            Text("\(example.closer) termine\u{00A0}: score retenu \(example.retained), \(example.cause).")
                 .font(Theme.Typography.detail)
                 .foregroundStyle(.secondary)
         }

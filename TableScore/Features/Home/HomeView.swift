@@ -55,12 +55,13 @@ private struct HomeScreen: View {
             isPresented: $isConfirmingReplacement,
             titleVisibility: .visible
         ) {
-            Button("Abandonner et commencer", role: .destructive) {
+            // Rien n'est archivé ici : l'archivage n'a lieu qu'à « Commencer » dans la feuille de création.
+            Button("Continuer") {
                 router.present(.newGame)
             }
             Button("Annuler", role: .cancel) {}
         } message: {
-            Text("La partie en cours sera rangée dans les parties terminées comme interrompue.")
+            Text("La partie en cours ne sera rangée comme interrompue, dans les parties terminées, que si vous touchez «\u{00A0}Commencer\u{00A0}». Vous pourrez encore annuler.")
         }
     }
 
@@ -104,7 +105,7 @@ private struct HomeScreen: View {
                 .font(.headline)
             Text(HomeModel.summaryText(playerCount: summary.playerCount, roundsPlayed: summary.roundsPlayed))
             if summary.isOver {
-                Text("Partie terminée : résultat à consulter")
+                Text("Partie terminée\u{00A0}: résultat à consulter")
             }
             Text(HomeModel.lastSavedText(updatedAt: summary.updatedAt))
                 .foregroundStyle(.secondary)

@@ -67,6 +67,18 @@ struct AppShellTests {
         #expect(ScoreFormat.spoken(7) == "7")
     }
 
+    @Test("Écart au premier : « +12 pts » affiché, « 12 points de plus que le premier » lu")
+    func gapTexts() {
+        #expect(PlayerScoreRow.gapText(12) == "+12\u{00A0}pts")
+        #expect(PlayerScoreRow.spokenGap(12) == "12 points de plus que le premier")
+        #expect(PlayerScoreRow.spokenGap(1) == "1 point de plus que le premier")
+    }
+
+    @Test("Textes de dates : locale française forcée")
+    func frenchLocale() {
+        #expect(Theme.locale.identifier == "fr_FR")
+    }
+
     #if DEBUG
     // MARK: Fixtures de tests UI
 
