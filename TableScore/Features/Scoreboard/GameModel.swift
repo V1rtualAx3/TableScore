@@ -1,0 +1,193 @@
+import Foundation
+import Observation
+import TableScoreKit
+
+/// Modèle du tableau des scores : charge la partie depuis le dépôt (source de vérité) et expose
+/// des données **d'affichage**. Aucun calcul de score ici : totaux, rangs, leaders, fin de partie
+/// et incohérences viennent de `GameComputation` (`ScoreEngine`).
+@Observable
+@MainActor
+final class GameModel {
+    /// Ligne du tableau, dans l'ordre stable `displayOrder` (jamais retrié).
+    struct Row: Identifiable, Equatable {
+        let id: UUID
+        /// Rang 0-based dans l'ordre d'affichage (= indice d'identifiant d'accessibilité).
+        let position: Int
+        let name: String
+        let total: Int
+        /// Rang du moteur (les égalités partagent le même rang).
+        let rank: Int
+        let isLeader: Bool
+        /// Différence d'affichage avec le total des leaders ; `nil` pour un leader.
+        let gapToLeader: Int?
+    }
+
+    /// Message non bloquant « Manche n enregistrée », déduit au rechargement.
+    struct Banner: Equatable {
+        let message: String
+        let detail: String?
+    }
+
+    enum LoadState: Equatable {
+        case loading
+        case loaded
+        case failed(message: String)
+    }
+
+    private(set) var loadState: LoadState = .loading
+    private(set) var game: SavedGame?
+    private(set) var banner: Banner?
+    /// Incrémenté à chaque nouvelle manche détectée (déclencheur de l'haptique).
+    private(set) var savedRoundCount = 0
+    /// Erreur d'une action (rejouer, abandonner), affichée dans une alerte.
+    var actionError: String?
+
+    let gameID: UUID
+    private let repository: any GameRepository
+    /// Brouillon de « Rejouer » conservé : un double appel recrée la même partie (idempotent).
+    private var replayDraft: (id: UUID, participants: [Participant])?
+
+    init(gameID: UUID, repository: any GameRepository) {
+        self.gameID = gameID
+        self.repository = repository
+    }
+
+    // MARK: Chargement
+
+    /// Recharge la partie ; détecte une nouvelle dernière manche pour la bannière.
+    func load() {
+        do {
+            let loaded = try repository.game(id: gameID)
+            let previousCount = game?.computation.rounds.count
+            game = loaded
+            loadState = .loaded
+            let count = loaded.computation.rounds.count
+            if let previousCount {
+                if count > previousCount, let last = loaded.computation.rounds.last {
+                    banner = makeBanner(for: last, in: loaded)
+                    savedRoundCount += 1
+                } else if count < previousCount {
+                    banner = nil
+                }
+            }
+        } catch {
+            let repositoryError = GameRepositoryError.from(error, operation: .read)
+            game = nil
+            banner = nil
+            loadState = .failed(message: repositoryError.userFacingMessage)
+        }
+    }
+
+    func dismissBanner() {
+        banner = nil
+    }
+
+    private func makeBanner(for summary: RoundSummary, in game: SavedGame) -> Banner {
+        let message = String(localized: "Manche \(summary.scoring.index) enregistrée")
+        var detail: String?
+        if summary.scoring.verdict.isDoubled,
+           let closer = game.participants.first(where: { $0.id == summary.scoring.closingParticipantID }) {
+            let name = closer.displayName
+            let raw = ScoreFormat.display(summary.scoring.closingRawScore)
+            let effective = ScoreFormat.display(summary.scoring.closingEffectiveScore)
+            detail = String(localized: "\(name) : score doublé (\(raw) → \(effective))")
+        }
+        return Banner(message: message, detail: detail)
+    }
+
+    // MARK: Affichage
+
+    var isOver: Bool { game?.isOver ?? false }
+
+    /// Une nouvelle manche n'est proposée que pour une partie active que le moteur juge en cours.
+    var canAddRound: Bool {
+        guard let game else { return false }
+        return game.lifecycle == .active && game.computation.acceptsNewRound
+    }
+
+    /// « Abandonner » = archiver ; uniquement pour la partie active non terminée.
+    var canAbandon: Bool { canAddRound }
+
+    var roundCount: Int { game?.computation.rounds.count ?? 0 }
+    var playerCount: Int { game?.participants.count ?? 0 }
+    var hasInconsistency: Bool { game?.computation.inconsistency != nil }
+
+    var headerTitle: String {
+        guard let game else { return String(localized: "Partie") }
+        if game.isOver { return String(localized: "Partie terminée") }
+        return String(localized: "Manche \(game.computation.nextRoundIndex)")
+    }
+
+    var headerSubtitle: String {
+        String(localized: "\(playerCount) joueurs")
+    }
+
+    /// Lignes dans l'ordre d'affichage stable.
+    var rows: [Row] {
+        guard let game else { return [] }
+        let computation = game.computation
+        let standings = Dictionary(
+            computation.standings.map { ($0.participantID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let leaderTotal = computation.standings.first(where: \.isLeader)?.total
+        return game.participants.enumerated().map { position, participant in
+            let standing = standings[participant.id]
+            let total = standing?.total ?? computation.totals[participant.id] ?? 0
+            let isLeader = standing?.isLeader ?? false
+            let gap: Int? = (isLeader || leaderTotal == nil) ? nil : total - (leaderTotal ?? total)
+            return Row(
+                id: participant.id,
+                position: position,
+                name: participant.displayName,
+                total: total,
+                rank: standing?.rank ?? position + 1,
+                isLeader: isLeader,
+                gapToLeader: gap
+            )
+        }
+    }
+
+    /// Classement secondaire : ordre fourni par le moteur (`standings`).
+    var rankedRows: [Row] {
+        let byID = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return (game?.computation.standings ?? []).compactMap { byID[$0.participantID] }
+    }
+
+    // MARK: Actions
+
+    /// Crée une nouvelle partie (mêmes prénoms, même ordre, mêmes règles) et renvoie son identifiant.
+    func replay() -> UUID? {
+        guard let game else { return nil }
+        let draft = replayDraft ?? (
+            id: UUID(),
+            participants: game.participants.map {
+                Participant(displayName: $0.displayName, displayOrder: $0.displayOrder)
+            }
+        )
+        replayDraft = draft
+        do {
+            let created = try repository.createGame(
+                id: draft.id,
+                participants: draft.participants,
+                rules: game.rules,
+                title: game.title
+            )
+            return created.id
+        } catch {
+            actionError = GameRepositoryError.from(error, operation: .write).userFacingMessage
+            return nil
+        }
+    }
+
+    /// Archive la partie (conservée, « Interrompue ») ; `true` si réussi.
+    func abandon() -> Bool {
+        do {
+            _ = try repository.archiveGame(id: gameID)
+            return true
+        } catch {
+            actionError = GameRepositoryError.from(error, operation: .write).userFacingMessage
+            return false
+        }
+    }
+}
