@@ -70,7 +70,7 @@ enum PayloadCoding {
         do {
             data = try encoder.encode(envelope)
         } catch {
-            throw GameRepositoryError.storageFailure(.encoding, message: String(describing: type(of: error)))
+            throw GameRepositoryError.storageFailure(.encoding, message: ErrorDiagnostics.summary(of: error))
         }
         // Ne jamais écrire ce qui ne pourrait pas être relu.
         guard data.count <= maxPayloadByteCount else {
@@ -159,7 +159,33 @@ enum RecordMapper {
         guard lifecycle != .finished || game.isOver else {
             throw PersistedDataCorruption.finishedGameNotOver
         }
+        guard datesMatchLifecycle(lifecycle, finishedAt: record.finishedAt, archivedAt: record.archivedAt) else {
+            throw PersistedDataCorruption.inconsistentDates
+        }
+        // Le titre stocké doit respecter les mêmes règles qu'à la création.
+        guard isValidStoredTitle(record.title) else {
+            throw PersistedDataCorruption.invalidTitle
+        }
         return game
+    }
+
+    /// Dates attendues selon le statut (toujours produites ainsi par `GameWritePlanner`) :
+    /// active ⇒ ni fin ni archivage ; terminée ⇒ date de fin, pas d'archivage ;
+    /// archivée ⇒ date d'archivage (date de fin facultative : partie terminée ou interrompue).
+    static func datesMatchLifecycle(_ lifecycle: GameLifecycle, finishedAt: Date?, archivedAt: Date?) -> Bool {
+        switch lifecycle {
+        case .active: return finishedAt == nil && archivedAt == nil
+        case .finished: return finishedAt != nil && archivedAt == nil
+        case .archived: return archivedAt != nil
+        }
+    }
+
+    private static func isValidStoredTitle(_ title: String?) -> Bool {
+        do {
+            return try GameWritePlanner.validatedTitle(title) == title
+        } catch {
+            return false
+        }
     }
 
     static func roundInput(from record: RoundRecord) throws(PersistedDataCorruption) -> RoundInput {

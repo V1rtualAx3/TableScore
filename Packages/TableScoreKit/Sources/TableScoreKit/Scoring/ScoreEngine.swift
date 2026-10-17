@@ -30,10 +30,13 @@ public enum ScoreEngine {
                 throw ValidationError.duplicateDisplayOrder(participant.displayOrder)
             }
             let name = participant.trimmedDisplayName
-            guard !name.isEmpty else {
+            // Un nom fait uniquement d'espaces ou de caractères invisibles est un nom vide.
+            guard Participant.hasVisibleContent(name) else {
                 throw ValidationError.emptyParticipantName(participantID: participant.id)
             }
-            guard name.count <= Participant.maxDisplayNameLength else {
+            guard name.count <= Participant.maxDisplayNameLength,
+                  name.utf8.count <= Participant.maxDisplayNameByteCount
+            else {
                 throw ValidationError.participantNameTooLong(
                     participantID: participant.id,
                     maxLength: Participant.maxDisplayNameLength

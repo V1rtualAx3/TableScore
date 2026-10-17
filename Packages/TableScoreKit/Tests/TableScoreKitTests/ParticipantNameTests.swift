@@ -51,6 +51,45 @@ struct ParticipantNameTests {
         #expect(Participant.containsDisallowedCharacters("a\nb"))
     }
 
+    @Test("Zalgo : un seul graphème mais plus de 256 octets UTF-8 ⇒ refusé")
+    func zalgoNameRejectedByByteCount() throws {
+        let zalgo = "a" + String(repeating: "\u{0301}", count: 200)
+        #expect(zalgo.count == 1)
+        #expect(zalgo.utf8.count > Participant.maxDisplayNameByteCount)
+        #expect(throws: ValidationError.participantNameTooLong(participantID: Fx.bob, maxLength: 24)) {
+            try ScoreEngine.validate(participants: players(bobName: zalgo))
+        }
+        // Quelques accents combinants restent acceptés.
+        try ScoreEngine.validate(participants: players(bobName: "Zoe\u{0301}"))
+    }
+
+    @Test("Nom fait uniquement de caractères invisibles ⇒ nom vide", arguments: [
+        "\u{200B}", "\u{2060}", "\u{FEFF}", " \u{200B}\u{2060} ", "\u{200D}",
+    ])
+    func invisibleOnlyNameIsEmpty(name: String) {
+        #expect(throws: ValidationError.emptyParticipantName(participantID: Fx.bob)) {
+            try ScoreEngine.validate(participants: players(bobName: name))
+        }
+    }
+
+    @Test("Contrôles bidirectionnels refusés", arguments: [
+        "Bob\u{202E}", "\u{202A}Bob", "Bo\u{202C}b", "\u{2066}Bob\u{2069}", "Bob\u{2067}", "Bob\u{2068}",
+    ])
+    func bidiControlsRejected(name: String) {
+        #expect(throws: ValidationError.participantNameHasInvalidCharacters(participantID: Fx.bob)) {
+            try ScoreEngine.validate(participants: players(bobName: name))
+        }
+    }
+
+    @Test("Liant U+200D et sélecteur U+FE0F conservés dans les émojis")
+    func emojiJoinersAccepted() throws {
+        try ScoreEngine.validate(participants: players(bobName: "👍\u{FE0F} Bob"))
+        try ScoreEngine.validate(participants: players(bobName: "🧑\u{200D}🍳 Bob"))
+        #expect(!Participant.containsDisallowedCharacters("🧑\u{200D}🍳\u{FE0F}"))
+        #expect(Participant.hasVisibleContent("🧑\u{200D}🍳"))
+        #expect(!Participant.hasVisibleContent("\u{200B} \u{2060}"))
+    }
+
     @Test("Un nom vide reste signalé comme vide (pas comme caractère interdit)")
     func emptyNameKeepsItsError() {
         #expect(throws: ValidationError.emptyParticipantName(participantID: Fx.bob)) {

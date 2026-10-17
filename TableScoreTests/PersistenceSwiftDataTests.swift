@@ -201,12 +201,16 @@ struct PersistenceSwiftDataTests {
         #expect(try repo.game(id: Fx.gameA).rounds.count == 2)
     }
 
-    @Test("Vraie erreur SwiftData (store rouvert en lecture seule) : erreur remontée, rien n'est écrit")
+    /// Régression CI (867c343) : après un échec réel de `save()` (NSCocoaErrorDomain 513), relire
+    /// via le même contexte provoquait un `fatalError` SwiftData (instance invalidée). Le dépôt
+    /// abandonne désormais le contexte fautif : relectures sans crash, store inchangé.
+    @Test("Vraie erreur SwiftData (store rouvert en lecture seule) : erreur typée, aucun crash, rien n'est écrit")
     func readOnlyStoreReportsRealSaveError() throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "TableScoreTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: directory) }
         let storeURL = directory.appending(path: PersistenceController.storeFileName, directoryHint: .notDirectory)
+        let round = Fx.round(1, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2])
 
         do {
             let writable = try PersistenceController.makeContainer(storage: .file(storeURL))
@@ -217,14 +221,34 @@ struct PersistenceSwiftDataTests {
         let readOnly = try PersistenceController.makeContainer(storage: .file(storeURL), allowsSave: false)
         let repo = SwiftDataGameRepository(container: readOnly)
         let before = try repo.game(id: Fx.gameA)
-        let error = repositoryError {
-            _ = try repo.appendRound(Fx.round(1, closer: Fx.alice, [Fx.alice: 1, Fx.bob: 2]), toGame: Fx.gameA)
+
+        let first = repositoryError { _ = try repo.appendRound(round, toGame: Fx.gameA) }
+        #expect(first?.isWriteFailure == true)
+        // Relectures par le même dépôt après l'échec réel : aucun crash, données inchangées.
+        #expect(try repo.game(id: Fx.gameA) == before)
+        #expect(try repo.activeGame() == before)
+        #expect(try repo.closedGames().isEmpty)
+
+        // Autres écritures sur le même dépôt : toujours une erreur typée, jamais un crash.
+        let second = repositoryError { _ = try repo.appendRound(round, toGame: Fx.gameA) }
+        #expect(second?.isWriteFailure == true)
+        let archive = repositoryError { _ = try repo.archiveGame(id: Fx.gameA) }
+        #expect(archive?.isWriteFailure == true)
+        let create = repositoryError {
+            _ = try repo.createGame(id: Fx.gameB, participants: Fx.players(2), rules: .classic)
         }
-        #expect(error?.isWriteFailure == true)
+        #expect(create?.isWriteFailure == true)
         #expect(try repo.game(id: Fx.gameA) == before)
 
+        // Nouvelle tentative du même brouillon sur un store accessible en écriture : enregistrée.
         let reopened = try PersistenceController.makeContainer(storage: .file(storeURL))
-        #expect(try SwiftDataGameRepository(container: reopened).game(id: Fx.gameA) == before)
+        let writableRepo = SwiftDataGameRepository(container: reopened)
+        #expect(try writableRepo.game(id: Fx.gameA) == before)
+        guard case .inserted = try writableRepo.appendRound(round, toGame: Fx.gameA) else {
+            Issue.record("La nouvelle tentative doit enregistrer la manche.")
+            return
+        }
+        #expect(try writableRepo.game(id: Fx.gameA).rounds.count == 1)
     }
 
     /// Échec injecté à la prochaine sauvegarde : l'opération doit échouer sans rien modifier,
@@ -432,6 +456,60 @@ struct PersistenceSwiftDataTests {
         ])
     }
 
+    @Test("Dates incompatibles avec le statut ⇒ corruption")
+    func inconsistentDatesAreCorrupted() throws {
+        let activeWithEnd = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: activeWithEnd, finishedAt: rawDate)
+        let activeError = repositoryError { _ = try SwiftDataGameRepository(container: activeWithEnd).activeGame() }
+        #expect(activeError == GameRepositoryError.corruptedData(gameID: Fx.gameA, .inconsistentDates))
+
+        let archivedWithoutDate = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: archivedWithoutDate, lifecycleRaw: GameLifecycle.archived.rawValue)
+        #expect(try SwiftDataGameRepository(container: archivedWithoutDate).closedGames() == [
+            .corrupted(id: Fx.gameA, updatedAt: rawDate, reason: .inconsistentDates)
+        ])
+
+        let archivedWithDate = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: archivedWithDate, lifecycleRaw: GameLifecycle.archived.rawValue, archivedAt: rawDate)
+        #expect(try SwiftDataGameRepository(container: archivedWithDate).game(id: Fx.gameA).isInterrupted)
+    }
+
+    @Test("Titre stocké invalide (retour à la ligne, trop long, zalgo, bidi) ⇒ corruption", arguments: [
+        "Soirée\nbis",
+        String(repeating: "t", count: 81),
+        "a" + String(repeating: "\u{0301}", count: 300),
+        "Soirée\u{202E}",
+        "  Soirée  ",
+        "",
+    ])
+    func invalidStoredTitleIsCorrupted(title: String) throws {
+        let container = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: container, title: title)
+        let error = repositoryError { _ = try SwiftDataGameRepository(container: container).activeGame() }
+        #expect(error == GameRepositoryError.corruptedData(gameID: Fx.gameA, .invalidTitle))
+    }
+
+    @Test("Titre stocké valide relu tel quel")
+    func validStoredTitleIsRead() throws {
+        let container = try PersistenceController.makeContainer(storage: .inMemory)
+        try insertRawGame(into: container, title: "Soirée 🦊")
+        #expect(try SwiftDataGameRepository(container: container).activeGame()?.title == "Soirée 🦊")
+    }
+
+    @Test("Diagnostic d'erreur : type et domaine/code, jamais la description")
+    func diagnosticsOmitDescription() {
+        let error = NSError(
+            domain: "NSCocoaErrorDomain",
+            code: 134_030,
+            userInfo: [NSLocalizedDescriptionKey: "/private/var/mobile/Containers/Alice/TableScore.store"]
+        )
+        let summary = ErrorDiagnostics.summary(of: error)
+        #expect(summary.contains("NSCocoaErrorDomain"))
+        #expect(summary.contains("134030"))
+        #expect(!summary.contains("/private"))
+        #expect(!summary.contains("Alice"))
+    }
+
     // MARK: Configuration
 
     @Test("Choix du stockage : -uiTesting et tests hébergés seulement en Debug ; Release toujours sur disque")
@@ -456,6 +534,20 @@ struct PersistenceSwiftDataTests {
         #expect(try repository.activeGame() == nil)
     }
 
+    /// Garanties « sans CloudKit » :
+    /// - code : `cloudKitDatabase: .none` et `groupContainer: .none` dans `PersistenceController` ;
+    ///   aucun accesseur public documenté de `ModelConfiguration` ne permet de relire la valeur
+    ///   `cloudKitDatabase` choisie (non vérifiable sans Xcode ici), d'où la vérification indirecte
+    ///   ci-dessous (`cloudKitContainerIdentifier == nil`) ;
+    /// - projet : `scripts/ci/check-no-network.sh` bloque déjà, dans le Swift, toute base CloudKit
+    ///   automatique ou privée et l'import du framework CloudKit ; dans pbxproj/plist/xcconfig, les
+    ///   motifs iCloud (insensible à la casse) et les clés de droits développeur Apple ; et tout
+    ///   fichier d'entitlements. Aucune capability CloudKit ne peut être ajoutée sans faire échouer
+    ///   la CI (motifs exacts : voir le script).
+    ///
+    /// Effet de bord assumé : `makeConfiguration(.applicationSupport)` crée le dossier
+    /// `Library/Application Support` du conteneur de l'app hôte s'il n'existe pas (dossier vide,
+    /// aucun store n'est ouvert ni créé).
     @Test("Configuration réelle (Application Support) : ni CloudKit ni conteneur partagé")
     func realConfigurationIsLocalOnly() throws {
         // Inspecte la configuration sans ouvrir le store.
@@ -504,6 +596,9 @@ struct PersistenceSwiftDataTests {
         into container: ModelContainer,
         id: UUID = PersistenceFixtures.gameA,
         lifecycleRaw: String = GameLifecycle.active.rawValue,
+        title: String? = nil,
+        finishedAt: Date? = nil,
+        archivedAt: Date? = nil,
         rulesPayloadOverride: Data? = nil,
         participants: [Participant] = PersistenceFixtures.players(2),
         rounds: [RoundInput] = [],
@@ -513,13 +608,13 @@ struct PersistenceSwiftDataTests {
         let rulesPayload = try rulesPayloadOverride ?? RecordMapper.rulesPayload(of: .classic)
         let game = GameRecord(
             gameID: id,
-            title: nil,
+            title: title,
             lifecycleRaw: lifecycleRaw,
             rulesPayload: rulesPayload,
             createdAt: rawDate,
             updatedAt: rawDate,
-            finishedAt: nil,
-            archivedAt: nil
+            finishedAt: finishedAt,
+            archivedAt: archivedAt
         )
         context.insert(game)
         for participant in participants {

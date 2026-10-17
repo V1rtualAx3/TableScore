@@ -120,7 +120,7 @@ enum PersistenceController {
                 configurations: configuration
             )
         } catch {
-            throw GameRepositoryError.storageFailure(.setup, message: String(describing: type(of: error)))
+            throw GameRepositoryError.storageFailure(.setup, message: ErrorDiagnostics.summary(of: error))
         }
     }
 
@@ -143,7 +143,7 @@ enum PersistenceController {
                 withIntermediateDirectories: true
             )
         } catch {
-            throw GameRepositoryError.storageFailure(.setup, message: String(describing: type(of: error)))
+            throw GameRepositoryError.storageFailure(.setup, message: ErrorDiagnostics.summary(of: error))
         }
         return ModelConfiguration(
             "TableScore",

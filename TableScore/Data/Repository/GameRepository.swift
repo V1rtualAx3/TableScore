@@ -50,6 +50,11 @@ enum PersistedDataCorruption: Error, Sendable, Hashable {
     case invalidHistory(ValidationError)
     /// Statut `finished` alors que le moteur considère la partie en cours.
     case finishedGameNotOver
+    /// Dates incompatibles avec le statut (active datée de fin ou d'archivage, terminée sans date
+    /// de fin, archivée sans date d'archivage…).
+    case inconsistentDates
+    /// Titre stocké qui ne respecte pas `GameWritePlanner.validatedTitle`.
+    case invalidTitle
     case duplicateGameID(UUID)
     case missingRoundRecord(roundID: UUID)
     case multipleActiveGames(count: Int)
@@ -65,7 +70,16 @@ enum PersistedDataCorruption: Error, Sendable, Hashable {
     static func from(_ error: any Error) -> PersistedDataCorruption {
         if let corruption = error as? PersistedDataCorruption { return corruption }
         if let validationError = error as? ValidationError { return .invalidHistory(validationError) }
-        return .unexpected(description: String(describing: type(of: error)))
+        return .unexpected(description: ErrorDiagnostics.summary(of: error))
+    }
+}
+
+/// Résumé de diagnostic d'une erreur : type + domaine/code `NSError`, jamais sa description
+/// (qui peut contenir un chemin de fichier ou une valeur saisie).
+enum ErrorDiagnostics {
+    static func summary(of error: any Error) -> String {
+        let nsError = error as NSError
+        return "\(type(of: error)) [\(nsError.domain) #\(nsError.code)]"
     }
 }
 
@@ -106,7 +120,7 @@ enum GameRepositoryError: Error, Sendable, Hashable {
     case identifierConflict(UUID)
     /// Données persistées illisibles : jamais de crash, jamais de valeur inventée.
     case corruptedData(gameID: UUID?, PersistedDataCorruption)
-    /// Échec technique du stockage (transaction annulée).
+    /// Échec technique du stockage (transaction annulée). `message` = `ErrorDiagnostics.summary`.
     case storageFailure(StorageOperation, message: String)
 
     /// Conversion d'une erreur capturée (même principe que `PersistedDataCorruption.from`) :
@@ -114,7 +128,7 @@ enum GameRepositoryError: Error, Sendable, Hashable {
     static func from(_ error: any Error, operation: StorageOperation) -> GameRepositoryError {
         if let repositoryError = error as? GameRepositoryError { return repositoryError }
         if let validationError = error as? ValidationError { return .validation(validationError) }
-        return .storageFailure(operation, message: String(describing: error))
+        return .storageFailure(operation, message: ErrorDiagnostics.summary(of: error))
     }
 
     /// Message générique en français, sans nom de joueur, identifiant ni chemin de fichier.

@@ -8,8 +8,17 @@ import TableScoreKit
 /// 1. relit la partie et la valide entièrement par le moteur (`RecordMapper`) ;
 /// 2. obtient un plan pur (`GameWritePlanner`) ;
 /// 3. applique le plan dans un contexte privé sans sauvegarde automatique ;
-/// 4. sauvegarde une seule fois ; en cas d'échec, `rollback()` puis erreur typée.
+/// 4. sauvegarde une seule fois ; en cas d'échec, le contexte est **abandonné** et remplacé par un
+///    contexte neuf, puis une erreur typée est levée.
 /// Aucun succès n'est renvoyé sans sauvegarde réussie.
+///
+/// Pourquoi abandonner le contexte plutôt que `rollback()` : après un échec réel de `save()`
+/// (permission, disque plein, E/S), SwiftData peut laisser dans le contexte des instances dont les
+/// données n'existent plus dans le store (ex. manche insérée encore référencée par la relation
+/// `rounds` de la partie en cache) ; y accéder provoque un `fatalError` de SwiftData. Un contexte
+/// neuf ne contient aucune instance : la relecture suivante repart du store, inchangé puisque la
+/// transaction SQLite a échoué. Règle : après un échec, plus aucun objet issu de l'ancien contexte
+/// n'est touché (les méthodes ne conservent aucun enregistrement entre deux appels).
 ///
 /// Écrivain unique : une seule instance par conteneur dans l'application (le contexte conserve
 /// ses objets en cache ; un second écrivain concurrent pourrait lire des valeurs périmées).
@@ -20,7 +29,8 @@ final class SwiftDataGameRepository: GameRepository {
 
     /// Conservé explicitement : le contexte ne doit jamais survivre à son conteneur.
     private let container: ModelContainer
-    private let context: ModelContext
+    /// Remplacé après tout échec d'écriture (voir ci-dessus) ; jamais conservé ailleurs.
+    private var context: ModelContext
     private let now: @MainActor () -> Date
     private let saveHandler: SaveHandler
 
@@ -30,10 +40,7 @@ final class SwiftDataGameRepository: GameRepository {
         saveHandler: @escaping SaveHandler = { try $0.save() }
     ) {
         self.container = container
-        let context = ModelContext(container)
-        // Sauvegarde explicite uniquement : aucune écriture partielle à un instant arbitraire.
-        context.autosaveEnabled = false
-        self.context = context
+        self.context = Self.makeContext(container)
         self.now = now
         self.saveHandler = saveHandler
     }
@@ -101,7 +108,7 @@ final class SwiftDataGameRepository: GameRepository {
             }
             try insert(candidate)
         } catch {
-            context.rollback()
+            discardContext()
             throw GameRepositoryError.from(error, operation: .write)
         }
         try commit()
@@ -131,7 +138,7 @@ final class SwiftDataGameRepository: GameRepository {
                 )
                 RecordMapper.apply(updated, toHeaderOf: record)
             } catch {
-                context.rollback()
+                discardContext()
                 throw GameRepositoryError.from(error, operation: .write)
             }
             try commit()
@@ -166,7 +173,7 @@ final class SwiftDataGameRepository: GameRepository {
                 }
                 RecordMapper.apply(updated, toHeaderOf: record)
             } catch {
-                context.rollback()
+                discardContext()
                 throw GameRepositoryError.from(error, operation: .write)
             }
             try commit()
@@ -360,24 +367,37 @@ final class SwiftDataGameRepository: GameRepository {
         do {
             return try context.fetch(descriptor)
         } catch {
-            throw GameRepositoryError.storageFailure(.read, message: String(describing: type(of: error)))
+            throw GameRepositoryError.storageFailure(.read, message: ErrorDiagnostics.summary(of: error))
         }
     }
 
-    /// Sauvegarde unique de la transaction ; en cas d'échec, tout est annulé.
+    /// Sauvegarde unique de la transaction ; en cas d'échec, le contexte fautif est abandonné
+    /// (aucun `rollback()` ni accès à ses objets) et remplacé par un contexte neuf.
     private func commit() throws(GameRepositoryError) {
         do {
             try saveHandler(context)
         } catch {
-            context.rollback()
-            throw GameRepositoryError.storageFailure(.write, message: String(describing: error))
+            discardContext()
+            throw GameRepositoryError.storageFailure(.write, message: ErrorDiagnostics.summary(of: error))
         }
     }
 
     /// Filet de sécurité : aucune modification résiduelle ne doit être emportée par une écriture.
     private func discardPendingChanges() {
         if context.hasChanges {
-            context.rollback()
+            discardContext()
         }
+    }
+
+    /// Remplace le contexte courant par un contexte neuf, sans toucher à l'ancien ni à ses objets.
+    private func discardContext() {
+        context = Self.makeContext(container)
+    }
+
+    private static func makeContext(_ container: ModelContainer) -> ModelContext {
+        let context = ModelContext(container)
+        // Sauvegarde explicite uniquement : aucune écriture partielle à un instant arbitraire.
+        context.autosaveEnabled = false
+        return context
     }
 }

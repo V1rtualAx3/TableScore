@@ -9,6 +9,8 @@ import TableScoreKit
 enum GameWritePlanner {
     /// Longueur maximale du titre facultatif d'une partie (caractères perçus).
     static let maxTitleLength = 80
+    /// Borne en octets UTF-8 (graphèmes chargés de marques combinantes).
+    static let maxTitleByteCount = 512
 
     enum AppendPlan: Sendable, Hashable {
         case alreadySaved
@@ -57,15 +59,17 @@ enum GameWritePlanner {
         }
     }
 
-    /// Titre sans espaces de bordure ; vide ⇒ `nil`.
+    /// Titre sans espaces de bordure ; vide ⇒ `nil`. Mêmes caractères interdits que les noms
+    /// (contrôles, séparateurs de ligne, contrôles bidirectionnels) ; un titre fait uniquement de
+    /// caractères invisibles est refusé. Utilisé à la création **et** à la relecture.
     static func validatedTitle(_ title: String?) throws(GameRepositoryError) -> String? {
         guard let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
             return nil
         }
-        guard trimmed.count <= maxTitleLength else {
+        guard trimmed.count <= maxTitleLength, trimmed.utf8.count <= maxTitleByteCount else {
             throw GameRepositoryError.invalidTitle(.tooLong(maxLength: maxTitleLength))
         }
-        guard !Participant.containsDisallowedCharacters(trimmed) else {
+        guard Participant.hasVisibleContent(trimmed), !Participant.containsDisallowedCharacters(trimmed) else {
             throw GameRepositoryError.invalidTitle(.invalidCharacters)
         }
         return trimmed

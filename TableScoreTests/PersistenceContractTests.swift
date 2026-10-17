@@ -595,7 +595,17 @@ struct PersistenceContractTests {
             )
         }
         #expect(tooLong == GameRepositoryError.invalidTitle(.tooLong(maxLength: 80)))
-        for title in ["Soirée\nbis", "\u{0000}", "Soirée\u{2028}bis"] {
+        // « Zalgo » : un seul graphème mais plus de 512 octets UTF-8.
+        let zalgo = repositoryError {
+            _ = try repo.createGame(
+                id: Fx.gameA,
+                participants: Fx.players(2),
+                rules: .classic,
+                title: "a" + String(repeating: "\u{0301}", count: 300)
+            )
+        }
+        #expect(zalgo == GameRepositoryError.invalidTitle(.tooLong(maxLength: 80)))
+        for title in ["Soirée\nbis", "\u{0000}", "Soirée\u{2028}bis", "Soirée\u{202E}", "\u{200B}\u{2060}"] {
             let invalid = repositoryError {
                 _ = try repo.createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic, title: title)
             }
@@ -625,7 +635,19 @@ struct PersistenceContractTests {
             _ = try repo.createGame(id: Fx.gameA, participants: players(bobName: String(repeating: "b", count: 25)), rules: .classic)
         }
         #expect(tooLong?.validationReason == .participantNameTooLong(participantID: Fx.bob, maxLength: 24))
-        for name in ["Bo\nb", "\u{0000}Bob"] {
+        let zalgo = repositoryError {
+            _ = try repo.createGame(
+                id: Fx.gameA,
+                participants: players(bobName: "b" + String(repeating: "\u{0301}", count: 200)),
+                rules: .classic
+            )
+        }
+        #expect(zalgo?.validationReason == .participantNameTooLong(participantID: Fx.bob, maxLength: 24))
+        let invisible = repositoryError {
+            _ = try repo.createGame(id: Fx.gameA, participants: players(bobName: "\u{200B}"), rules: .classic)
+        }
+        #expect(invisible?.validationReason == .emptyParticipantName(participantID: Fx.bob))
+        for name in ["Bo\nb", "\u{0000}Bob", "Bob\u{202E}", "\u{2066}Bob\u{2069}"] {
             let invalid = repositoryError {
                 _ = try repo.createGame(id: Fx.gameA, participants: players(bobName: name), rules: .classic)
             }
