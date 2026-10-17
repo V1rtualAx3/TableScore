@@ -43,3 +43,13 @@ playground.xcworkspace
 .idea/
 # Réglages Claude Code propres à un poste (les agents et instructions restent versionnés).
 .claude/settings.local.json
+
+# --- Archives, clés et sorties fastlane : ne jamais versionner ---
+*.xcarchive
+*.pem
+*.key
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+fastlane/builds/

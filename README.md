@@ -78,9 +78,21 @@ Vues SwiftUI  →  état de présentation  →  ScoreEngine pur (TableScoreKit) 
 
 L'application ne contient ni requête réseau, ni WebView, ni compte, ni publicité, ni télémétrie,
 ni CloudKit, ni entitlement ou capability. Elle doit fonctionner en mode avion dès le premier lancement.
-La CI fait échouer le build si une source Swift contient une API réseau (`URLSession`, `Network`,
-`WebKit`, `CloudKit`…) ou une URL `http(s)://` hors ligne de commentaire, ou si le projet déclare un
-entitlement, une exception ATS ou un mode d'arrière-plan.
+La CI fait échouer le build (`scripts/ci/check-no-network.sh`) si une source Swift contient une API réseau
+ou de sortie externe (`URLSession`, `Network`, `WebKit`, `CloudKit`, `AsyncImage`, sockets, `openURL`,
+`contentsOf:`, imports de frameworks tiers ou de services Apple connectés…) ou une URL
+`http(s)://`, `ws(s)://`, `ftp://` (casse ignorée), si le dépôt contient du code natif (`.m`, `.c`, `.cpp`, `.h`),
+une dépendance distante (`.package(url:)`, `XCRemoteSwiftPackageReference`, `Package.resolved` avec pins),
+un script de build, ou si le projet déclare un entitlement, une permission (`*UsageDescription`,
+`NSBonjourServices`), une exception ATS ou un mode d'arrière-plan.
+
+**Ce contrôle est heuristique** : il scanne toutes les lignes, commentaires compris (faux positifs possibles,
+à résoudre en reformulant ; `Data(contentsOf:)` local, aujourd'hui bloqué, devra faire l'objet d'un
+assouplissement audité). Il est complété par une **inspection binaire** après le build iOS
+(`scripts/ci/check-binary.sh` : `otool -L` bloque `Network`/`WebKit`/`SafariServices`, `CFNetwork` est
+seulement signalé ; `nm -u` bloque `URLSession`, `nw_connection`, `WKWebView`) et par un **test manuel en mode
+avion** avant chaque livraison. Des fixtures négatives (`scripts/ci/fixtures/`, vérifiées par
+`scripts/ci/test-checks.sh`) garantissent que chaque motif reste détecté.
 
 ## Intégration continue
 

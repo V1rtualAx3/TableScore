@@ -1,0 +1,7 @@
+<key>NSCameraUsageDescription</key>
+<key>NSBonjourServices</key>
+<key>NSAppTransportSecurity</key>
+<key>UIBackgroundModes</key>
+<key>aps-environment</key>
+<key>com.apple.developer.icloud-services</key>
+<key>SystemCapabilities</key>

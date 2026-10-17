@@ -28,7 +28,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Annule les doublons de PR seulement : un push sur main (ou un lancement manuel)
+  # n'est jamais annulé, afin que chaque commit de main soit validé.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -54,52 +56,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Contrôle statique zéro réseau (sources Swift)
-        # Strict : seules les lignes entièrement commentées (//, ///, /*, *) sont
-        # ignorées ; une URL dans une chaîne ou après du code est signalée.
-        run: |
-          set -euo pipefail
-          pattern='URLSession|URLRequest|NWConnection|NWListener|NWBrowser|WKWebView|SFSafariViewController|CloudKit|CKContainer|import[[:space:]]+([a-z]+[[:space:]]+)?(Network|WebKit|SafariServices|Alamofire|Firebase|Sentry)|https?://|wss?://'
-          swift_count="$(find . -type f -name '*.swift' -not -path '*/.build/*' -not -path './.git/*' | wc -l)"
-          if [ "$swift_count" -eq 0 ]; then
-            echo "::error::Aucun fichier Swift trouvé : contrôle inopérant."
-            exit 1
-          fi
-          raw="$(mktemp)"
-          hits="$(mktemp)"
-          rc=0
-          grep -rnHE --include='*.swift' --exclude-dir=.build --exclude-dir=.git -- "$pattern" . > "$raw" || rc=$?
-          if [ "$rc" -gt 1 ]; then
-            echo "::error::grep a échoué (code $rc)."
-            exit "$rc"
-          fi
-          awk '{ line = $0; sub(/^[^:]*:[0-9]+:/, "", line); if (line !~ /^[[:space:]]*(\/\/|\/\*|\*)/) print $0 }' "$raw" > "$hits"
-          if [ -s "$hits" ]; then
-            echo "::error::API ou URL réseau interdite détectée (politique hors ligne, cahier des charges §7) :"
-            cat "$hits"
-            exit 1
-          fi
-          echo "OK : ${swift_count} fichiers Swift analysés, aucune API réseau ni URL distante."
+      - name: Contrôle statique zéro réseau et chaîne d'approvisionnement
+        # Heuristique STRICTE (voir scripts/ci/check-no-network.sh) : toutes les lignes
+        # sont scannées, commentaires inclus (faux positifs acceptés). Couvre API réseau,
+        # imports de frameworks, URL (casse ignorée), code natif, dépendances distantes,
+        # entitlements, permissions, ATS, arrière-plan, CloudKit.
+        run: bash scripts/ci/check-no-network.sh .
 
-      - name: Contrôle statique entitlements / ATS / arrière-plan
-        run: |
-          set -euo pipefail
-          entitlements="$(find . -type f -name '*.entitlements' -not -path './.git/*')"
-          if [ -n "$entitlements" ]; then
-            echo "::error::Fichier d'entitlements inattendu (aucune capability autorisée) :"
-            echo "$entitlements"
-            exit 1
-          fi
-          rc=0
-          grep -rnHE --include='*.pbxproj' --include='*.plist' --exclude-dir=.git -- 'CODE_SIGN_ENTITLEMENTS|NSAppTransportSecurity|NSAllowsArbitraryLoads|UIBackgroundModes|com\.apple\.developer\.' . || rc=$?
-          if [ "$rc" -eq 0 ]; then
-            echo "::error::Réglage réseau, d'arrière-plan ou d'entitlement interdit détecté (ci-dessus)."
-            exit 1
-          elif [ "$rc" -gt 1 ]; then
-            echo "::error::grep a échoué (code $rc)."
-            exit "$rc"
-          fi
-          echo "OK : aucun entitlement, exception ATS ni mode d'arrière-plan."
+      - name: Non-régression du contrôle (fixtures négatives)
+        run: bash scripts/ci/test-checks.sh
 
       - name: Version de Swift
         run: swift --version
@@ -193,6 +158,10 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Inspection binaire zéro réseau (otool / nm)
+        # Complète le contrôle statique (heuristique) sur le binaire réellement produit.
+        run: bash scripts/ci/check-binary.sh "$RUNNER_TEMP/DerivedData"
 
       - name: Tests unitaires et UI
         run: |

@@ -1,0 +1,3 @@
+XCRemoteSwiftPackageReference "https-exemple"
+repositoryURL = "x";
+PBXShellScriptBuildPhase

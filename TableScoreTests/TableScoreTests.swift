@@ -26,6 +26,14 @@ struct AppConfigurationTests {
         #expect(!hasBackgroundModes)
     }
 
+    @Test("Aucune permission (clé *UsageDescription) ni service Bonjour n'est déclaré")
+    func noUsageDescriptionOrBonjour() {
+        let keys = Bundle.main.infoDictionary?.keys.map { $0 } ?? []
+        let usageKeys = keys.filter { $0.hasSuffix("UsageDescription") }
+        #expect(usageKeys.isEmpty)
+        #expect(Bundle.main.object(forInfoDictionaryKey: "NSBonjourServices") == nil)
+    }
+
     @Test("L'écran d'accueil se construit")
     @MainActor
     func homeViewBuilds() {
