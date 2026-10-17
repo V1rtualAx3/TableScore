@@ -19,13 +19,16 @@ private final class HistoryTestClock {
 
 /// Dépôt à une seule partie, initialisé avec une `SavedGame` arbitraire : permet de reproduire une
 /// fin anticipée **déjà enregistrée** (données anciennes), impossible à créer via l'API publique.
-/// Mêmes décisions que les dépôts réels (`GameWritePlanner`) ; échec de suppression simulable.
+/// Mêmes décisions que les dépôts réels (`GameWritePlanner`) ; échecs d'écriture simulables.
 @MainActor
 private final class SingleGameRepository: GameRepository {
     private(set) var stored: SavedGame
-    /// `nil` : aucune panne ; sinon nombre de suppressions encore autorisées avant échec.
-    var remainingSuccessfulDeletions: Int?
-    private(set) var deletionCount = 0
+    /// Toute écriture échoue (rien n'est modifié) tant que la valeur est vraie.
+    var failsWrites = false
+    /// La prochaine correction (`replaceRound`) échoue, les autres écritures réussissent.
+    var failsNextReplace = false
+    /// Nombre d'écritures réussies (chaque appel atomique compte pour une).
+    private(set) var writeCount = 0
     private let clock: HistoryTestClock
 
     init(game: SavedGame) {
@@ -35,6 +38,14 @@ private final class SingleGameRepository: GameRepository {
 
     func replaceStored(_ game: SavedGame) {
         stored = game
+    }
+
+    private func write(_ game: SavedGame) throws(GameRepositoryError) {
+        guard !failsWrites else {
+            throw GameRepositoryError.storageFailure(.write, message: "Échec simulé.")
+        }
+        stored = game
+        writeCount += 1
     }
 
     func activeGame() throws(GameRepositoryError) -> SavedGame? {
@@ -63,7 +74,7 @@ private final class SingleGameRepository: GameRepository {
         case .alreadySaved:
             return .alreadySaved(current)
         case .insert(let updated):
-            stored = updated
+            try write(updated)
             return .inserted(updated)
         }
     }
@@ -79,27 +90,37 @@ private final class SingleGameRepository: GameRepository {
         case .requiresDecision(let conflict):
             return .requiresDecision(conflict)
         case .write(let updated, _, let removedRounds):
-            stored = updated
+            if failsNextReplace {
+                failsNextReplace = false
+                throw GameRepositoryError.storageFailure(.write, message: "Échec simulé.")
+            }
+            try write(updated)
             return .saved(updated, removedRounds: removedRounds)
         }
     }
 
     func deleteLastRound(ofGame gameID: UUID) throws(GameRepositoryError) -> RoundDeletion {
-        if let remaining = remainingSuccessfulDeletions {
-            guard remaining > 0 else {
-                throw GameRepositoryError.storageFailure(.write, message: "Échec simulé.")
-            }
-            remainingSuccessfulDeletions = remaining - 1
-        }
         let deletion = try GameWritePlanner.planDeleteLast(of: try game(id: gameID), at: clock.next())
-        stored = deletion.game
-        deletionCount += 1
+        try write(deletion.game)
         return deletion
+    }
+
+    func deleteRoundsAfterEarlyEnd(
+        gameID: UUID,
+        confirmedRoundIDs: [UUID]
+    ) throws(GameRepositoryError) -> SavedGame {
+        let plan = try GameWritePlanner.planDeleteRoundsAfterEarlyEnd(
+            try game(id: gameID),
+            confirmedRoundIDs: confirmedRoundIDs,
+            at: clock.next()
+        )
+        try write(plan.game)
+        return plan.game
     }
 
     func finishGame(id: UUID) throws(GameRepositoryError) -> SavedGame {
         guard let updated = try GameWritePlanner.planFinish(try game(id: id), at: clock.next()) else { return stored }
-        stored = updated
+        try write(updated)
         return updated
     }
 
@@ -108,17 +129,21 @@ private final class SingleGameRepository: GameRepository {
         guard let updated = try GameWritePlanner.planReopen(current, otherActiveGameID: nil, at: clock.next()) else {
             return current
         }
-        stored = updated
+        try write(updated)
         return updated
     }
 
     func archiveGame(id: UUID) throws(GameRepositoryError) -> SavedGame {
         guard let updated = GameWritePlanner.planArchive(try game(id: id), at: clock.next()) else { return stored }
-        stored = updated
+        try write(updated)
         return updated
     }
 
     func deleteGame(id: UUID) throws(GameRepositoryError) -> Bool { false }
+
+    func deleteAllGames() throws(GameRepositoryError) {
+        throw GameRepositoryError.storageFailure(.write, message: "Non pris en charge par la doublure.")
+    }
 }
 
 // MARK: - Tests
@@ -224,19 +249,19 @@ struct HistoryModelTests {
         let first = try row(model, index: 1)
         #expect(first.closerName == "Alice")
         #expect(first.isCloserDoubled)
-        #expect(first.closerNote == "score doublé : égalité avec Chloé")
+        #expect(first.closerNote == "score doublé\u{00A0}: égalité avec Chloé")
         #expect(first.players.map(\.isClosing) == [true, false, false, false])
         #expect(first.players.map(\.isDoubled) == [true, false, false, false])
 
         let second = try row(model, index: 2)
         #expect(second.closerName == "Bob")
         #expect(second.isCloserDoubled)
-        #expect(second.closerNote == "score doublé : Alice a fait moins")
+        #expect(second.closerNote == "score doublé\u{00A0}: Alice a fait moins")
         #expect(second.players.map(\.isDoubled) == [false, true, false, false])
 
         let third = try row(model, index: 3)
         #expect(!third.isCloserDoubled)
-        #expect(third.closerNote == "zéro, jamais doublé")
+        #expect(third.closerNote == "zéro n'est jamais doublé")
         #expect(third.players.allSatisfy({ !$0.isDoubled }))
 
         let fourth = try row(model, index: 4)
@@ -249,7 +274,7 @@ struct HistoryModelTests {
     func spokenSummary() throws {
         let model = historyModel(try seededRepository(), Key.historyActive.id)
         let first = try row(model, index: 1).accessibilityLabel
-        #expect(first.hasPrefix("Manche 1, Alice a terminé, score doublé : égalité avec Chloé."))
+        #expect(first.hasPrefix("Manche 1, Alice a terminé, score doublé\u{00A0}: égalité avec Chloé."))
         #expect(first.contains("Alice 10 doublé à 20, total 20."))
         #expect(first.contains("Bob 24, total 24."))
         let fourth = try row(model, index: 4).accessibilityLabel
@@ -257,12 +282,26 @@ struct HistoryModelTests {
         #expect(fourth.contains("Alice 9, total 41."))
     }
 
-    @Test("Liste de noms en français")
+    @Test("Liste de noms en français (formateur partagé)")
     func frenchList() {
-        #expect(HistoryModel.frenchList([]) == "")
-        #expect(HistoryModel.frenchList(["Alice"]) == "Alice")
-        #expect(HistoryModel.frenchList(["Alice", "Bob"]) == "Alice et Bob")
-        #expect(HistoryModel.frenchList(["Alice", "Bob", "Chloé"]) == "Alice, Bob et Chloé")
+        #expect(VerdictText.frenchList([]) == "")
+        #expect(VerdictText.frenchList(["Alice"]) == "Alice")
+        #expect(VerdictText.frenchList(["Alice", "Bob"]) == "Alice et Bob")
+        #expect(VerdictText.frenchList(["Alice", "Bob", "Chloé"]) == "Alice, Bob et Chloé")
+    }
+
+    @Test("Textes des manches jouées après la fin : pluriels")
+    func laterRoundsTexts() {
+        #expect(LaterRoundsText.range([3]) == "la manche 3")
+        #expect(LaterRoundsText.range([3, 4]) == "les manches 3 et 4")
+        #expect(LaterRoundsText.range([3, 4, 5]) == "les manches 3 à 5")
+        #expect(LaterRoundsText.playedAfterSentence([3]) == "La manche 3 a été jouée ensuite.")
+        #expect(LaterRoundsText.playedAfterSentence([7, 8, 9]) == "Les manches 7 à 9 ont été jouées ensuite.")
+        #expect(LaterRoundsText.deletionTitle([3]) == "Supprimer définitivement la manche 3\u{202F}?")
+        #expect(LaterRoundsText.deletionTitle([7, 8, 9]) == "Supprimer définitivement 3 manches\u{202F}?")
+        #expect(LaterRoundsText.deletionMessage([3]) == "La manche 3 sera effacée. Cette action ne peut pas être annulée.")
+        #expect(LaterRoundsText.deletionButton([3, 4]) == "Supprimer 2 manches")
+        #expect(LaterRoundsText.deletionButton([3]) == "Supprimer la manche 3")
     }
 
     @Test("Partie sans manche : liste vide, rien à supprimer")
@@ -296,7 +335,7 @@ struct HistoryModelTests {
         let model = historyModel(try seededRepository(), Key.historyActive.id)
         let roundID = Key.historyActive.roundID(index: 1)
         #expect(model.requestEdit(roundID: roundID) == .present(roundID: roundID))
-        #expect(model.pendingReopenRoundID == nil)
+        #expect(model.actionError == nil)
         #expect(model.requestEdit(roundID: Self.fixedID(0x99)) == .unavailable)
     }
 
@@ -331,48 +370,154 @@ struct HistoryModelTests {
 
     // MARK: Partie close
 
-    @Test("Partie terminée : réouverture confirmée requise avant la correction")
-    func finishedGameRequiresReopen() throws {
-        let repository = InMemoryGameRepository()
+    /// Partie `tieEnd` (Alice 105, Bob 26, Chloé 26) close comme terminée.
+    private func finishedTieEnd() throws -> (InMemoryGameRepository, UUID) {
+        let clock = HistoryTestClock()
+        let repository = InMemoryGameRepository(now: { clock.next() })
         try UITestSeed.tieEnd.apply(to: repository)
         let gameID = UITestSeed.tieEnd.activeGameID
         _ = try repository.finishGame(id: gameID)
+        return (repository, gameID)
+    }
+
+    @Test("Partie terminée : la correction est présentée directement, sans dialogue ni écriture")
+    func finishedGamePresentsEditDirectly() throws {
+        let (repository, gameID) = try finishedTieEnd()
+        let before = try repository.game(id: gameID)
         let model = historyModel(repository, gameID)
         #expect(model.lifecycle == .finished)
         #expect(!model.canDeleteLastRound)
-        #expect(model.lifecycleNote != nil)
+        #expect(model.lifecycleNote == "Partie terminée. Touchez une manche pour la corriger.")
 
         let roundID = Key.tieEnd.roundID(index: 1)
-        #expect(model.requestEdit(roundID: roundID) == .needsReopen)
-        #expect(model.pendingReopenRoundID == roundID)
-        // Rien n'est écrit tant que l'utilisateur n'a pas confirmé.
-        #expect(try repository.game(id: gameID).lifecycle == .finished)
-
-        model.cancelReopen()
-        #expect(model.pendingReopenRoundID == nil)
-        #expect(try repository.game(id: gameID).lifecycle == .finished)
-
-        #expect(model.requestEdit(roundID: roundID) == .needsReopen)
-        #expect(model.confirmReopen(roundID: roundID) == roundID)
-        #expect(model.pendingReopenRoundID == nil)
-        #expect(model.actionError == nil)
-        #expect(try repository.game(id: gameID).lifecycle == .active)
-        #expect(model.lifecycle == .active)
         #expect(model.requestEdit(roundID: roundID) == .present(roundID: roundID))
+        #expect(model.actionError == nil)
+        #expect(try repository.game(id: gameID) == before)
     }
 
-    @Test("Réouverture refusée si une autre partie est en cours : message, aucune modification")
-    func reopenRefusedWhenAnotherGameIsActive() throws {
+    @Test("Partie terminée → correction annulée (bouton ou glissement) ⇒ toujours terminée, rien d'écrit")
+    func finishedGameCancelledCorrectionKeepsFinished() throws {
+        let (repository, gameID) = try finishedTieEnd()
+        let before = try repository.game(id: gameID)
+        let roundID = Key.tieEnd.roundID(index: 1)
+        #expect(historyModel(repository, gameID).requestEdit(roundID: roundID) == .present(roundID: roundID))
+
+        let entry = RoundEntryModel(gameID: gameID, mode: .edit(roundID: roundID), repository: repository)
+        entry.setText("30", for: entry.fields[1].participantID)
+        #expect(entry.canSave)
+        // Glissement de la feuille : seul le filet de sécurité s'exécute, sans écriture.
+        #expect(!entry.restoreLifecycleIfNeeded())
+        // Bouton « Annuler » puis « Abandonner ».
+        #expect(!entry.prepareForDismissal())
+        #expect(!entry.needsLifecycleRestore)
+        #expect(try repository.game(id: gameID) == before)
+    }
+
+    @Test("Partie terminée → correction qui garde la fin ⇒ toujours terminée, correction enregistrée")
+    func finishedGameCorrectionKeepingEndStaysFinished() throws {
+        let (repository, gameID) = try finishedTieEnd()
+        let roundID = Key.tieEnd.roundID(index: 1)
+        let entry = RoundEntryModel(gameID: gameID, mode: .edit(roundID: roundID), repository: repository)
+        // Bob 24 → 25 : Alice reste à 105, la partie reste terminée.
+        entry.setText("25", for: entry.fields[1].participantID)
+        #expect(entry.save() == .saved)
+        #expect(!entry.needsLifecycleRestore)
+
+        let after = try repository.game(id: gameID)
+        #expect(after.lifecycle == .finished)
+        #expect(after.isOver)
+        #expect(after.finishedAt != nil)
+        #expect(after.rounds[0].entry(for: entry.fields[1].participantID)?.rawScore == 25)
+        #expect(try repository.activeGame() == nil)
+
+        let model = historyModel(repository, gameID)
+        #expect(model.lifecycle == .finished)
+        #expect(try row(model, index: 1).isCorrected)
+    }
+
+    @Test("Correction qui annule la fin ⇒ partie active, après confirmation « La partie reprend »")
+    func finishedGameCorrectionCancellingEndResumes() throws {
+        let (repository, gameID) = try finishedTieEnd()
+        let before = try repository.game(id: gameID)
+        let roundID = Key.tieEnd.roundID(index: 3)
+        let entry = RoundEntryModel(gameID: gameID, mode: .edit(roundID: roundID), repository: repository)
+        // Alice 45 → 5 : 65 points, plus personne n'atteint 100.
+        entry.setText("5", for: entry.fields[0].participantID)
+
+        #expect(entry.save() == .needsDecision)
+        let decision = try #require(entry.pendingDecision)
+        #expect(decision == .gameResumes(targetScore: 100))
+        #expect(decision.title == "La partie reprend")
+        #expect(decision.cancelTitle == "Revenir à la saisie")
+        // Rien n'est écrit avant la confirmation.
+        #expect(try repository.game(id: gameID) == before)
+
+        #expect(entry.confirm(decision) == .saved)
+        let after = try repository.game(id: gameID)
+        #expect(after.lifecycle == .active)
+        #expect(!after.isOver)
+        #expect(after.finishedAt == nil)
+        #expect(!entry.needsLifecycleRestore)
+        #expect(try repository.activeGame()?.id == gameID)
+    }
+
+    @Test("Partie terminée, échec de la correction après réouverture ⇒ statut « terminée » rétabli aussitôt")
+    func finishedGameFailedCorrectionRestoresFinished() throws {
+        let alice = Participant(id: Self.fixedID(1), displayName: "Alice", displayOrder: 0)
+        let bob = Participant(id: Self.fixedID(2), displayName: "Bob", displayOrder: 1)
+        let ids = [alice.id, bob.id]
+        let date = Date(timeIntervalSinceReferenceDate: 810_000_000)
+        let finished = try SavedGame(
+            id: Self.fixedID(0xC0),
+            title: nil,
+            lifecycle: .finished,
+            rules: .classic,
+            participants: [alice, bob],
+            rounds: [
+                RoundInput(id: Self.fixedID(21), index: 1, closingParticipantID: bob.id, entries: Self.points(ids, [60, 4])),
+                RoundInput(id: Self.fixedID(22), index: 2, closingParticipantID: bob.id, entries: Self.points(ids, [45, 8])),
+            ],
+            roundInfo: [:],
+            createdAt: date,
+            updatedAt: date,
+            finishedAt: date,
+            archivedAt: nil
+        )
+        let repository = SingleGameRepository(game: finished)
+        let entry = RoundEntryModel(gameID: finished.id, mode: .edit(roundID: Self.fixedID(21)), repository: repository)
+        entry.setText("5", for: bob.id)
+
+        repository.failsNextReplace = true
+        #expect(entry.save() == .failed)
+        #expect(entry.saveErrorMessage != nil)
+        #expect(!entry.needsLifecycleRestore)
+        #expect(repository.stored.lifecycle == .finished)
+        #expect(repository.stored.rounds == finished.rounds)
+
+        // Nouvelle tentative : réouverture, correction, puis « terminée » rétabli.
+        entry.dismissSaveError()
+        #expect(entry.save() == .saved)
+        #expect(repository.stored.lifecycle == .finished)
+        #expect(repository.stored.rounds[0].entry(for: bob.id)?.rawScore == 5)
+    }
+
+    @Test("Partie terminée alors qu'une autre partie est en cours : message, aucune feuille, rien d'écrit")
+    func finishedGameEditRefusedWhenAnotherGameIsActive() throws {
         let repository = try seededRepository()
         let gameID = Key.historyFinished.id
+        let before = try repository.game(id: gameID)
         let model = historyModel(repository, gameID)
         let roundID = Key.historyFinished.roundID(index: 1)
-        #expect(model.requestEdit(roundID: roundID) == .needsReopen)
-        #expect(model.confirmReopen(roundID: roundID) == nil)
+        #expect(model.requestEdit(roundID: roundID) == .unavailable)
         let message = try #require(model.actionError)
         #expect(message.contains("Une autre partie est en cours"))
-        #expect(try repository.game(id: gameID).lifecycle == .finished)
+        #expect(try repository.game(id: gameID) == before)
         #expect(try repository.activeGame()?.id == Key.historyActive.id)
+
+        // Défense en profondeur : la feuille de saisie bloque aussi l'enregistrement.
+        let entry = RoundEntryModel(gameID: gameID, mode: .edit(roundID: roundID), repository: repository)
+        #expect(!entry.canSave)
+        #expect(entry.blockingReasons == [CorrectionText.anotherGameActive])
     }
 
     @Test("Partie interrompue : lecture seule")
@@ -475,9 +620,12 @@ struct HistoryModelTests {
         #expect(notice.subsequentRoundIndices == [3, 4])
         #expect(notice.subsequentRoundIDs == [Self.fixedID(13), Self.fixedID(14)])
         #expect(notice.actionTitle == "Supprimer les manches 3 et 4")
-        #expect(notice.confirmationTitle == "Supprimer définitivement 2 manches ?")
+        #expect(notice.confirmationTitle == "Supprimer définitivement 2 manches\u{202F}?")
+        #expect(notice.confirmationMessage
+            == "Les manches 3 et 4 seront effacées. Cette action ne peut pas être annulée.")
+        #expect(notice.confirmationButtonTitle == "Supprimer 2 manches")
         #expect(notice.message.contains("manche 2"))
-        #expect(!notice.requiresReopen)
+        #expect(notice.message.contains("Les manches 3 et 4 ont été jouées ensuite."))
         #expect(model.canResolveInconsistency)
         // La suppression unitaire (annulable) est remplacée par la résolution explicite.
         #expect(!model.canDeleteLastRound)
@@ -487,7 +635,7 @@ struct HistoryModelTests {
         let firstRow = try row(model, index: 1)
         #expect(!firstRow.isAfterGameEnd)
         #expect(repository.stored.rounds.count == 4)
-        #expect(repository.deletionCount == 0)
+        #expect(repository.writeCount == 0)
     }
 
     @Test("Résolution confirmée : seules les manches postérieures sont supprimées")
@@ -498,7 +646,8 @@ struct HistoryModelTests {
         let notice = try #require(model.inconsistency)
 
         #expect(model.deleteRoundsAfterEarlyEnd(confirmed: notice))
-        #expect(repository.deletionCount == 2)
+        // Une seule écriture atomique (plus de suppressions une à une).
+        #expect(repository.writeCount == 1)
         #expect(repository.stored.rounds == Array(original.rounds.prefix(2)))
         #expect(repository.stored.computation.inconsistency == nil)
         #expect(model.inconsistency == nil)
@@ -507,34 +656,42 @@ struct HistoryModelTests {
         #expect(model.undoableDeletion == nil)
     }
 
-    @Test("Résolution sur une partie close : réouverture puis suppression")
-    func resolveOnFinishedGameReopensFirst() throws {
+    @Test("Résolution sur une partie close : suppression atomique, la partie reste terminée")
+    func resolveOnFinishedGameKeepsFinished() throws {
         let original = try Self.inconsistentGame(lifecycle: .finished)
         let repository = SingleGameRepository(game: original)
         let model = historyModel(repository, original.id)
         let notice = try #require(model.inconsistency)
-        #expect(notice.requiresReopen)
-        #expect(notice.confirmationMessage.contains("La partie sera rouverte."))
+        #expect(model.canResolveInconsistency)
+        #expect(!notice.confirmationMessage.contains("rouverte"))
 
         #expect(model.deleteRoundsAfterEarlyEnd(confirmed: notice))
-        #expect(repository.stored.lifecycle == .active)
+        #expect(repository.writeCount == 1)
+        #expect(repository.stored.lifecycle == .finished)
+        #expect(repository.stored.finishedAt == original.finishedAt)
         #expect(repository.stored.rounds == Array(original.rounds.prefix(2)))
+        #expect(model.lifecycle == .finished)
         #expect(model.inconsistency == nil)
     }
 
-    @Test("Échec en cours de résolution : erreur affichée, aucune manche antérieure touchée")
-    func partialResolutionFailure() throws {
+    @Test("Échec de sauvegarde pendant la résolution : rien n'est supprimé, erreur affichée")
+    func resolutionFailureDeletesNothing() throws {
         let original = try Self.inconsistentGame()
         let repository = SingleGameRepository(game: original)
-        repository.remainingSuccessfulDeletions = 1
         let model = historyModel(repository, original.id)
         let notice = try #require(model.inconsistency)
 
-        #expect(model.deleteRoundsAfterEarlyEnd(confirmed: notice))
+        repository.failsWrites = true
+        #expect(!model.deleteRoundsAfterEarlyEnd(confirmed: notice))
         #expect(model.actionError != nil)
-        #expect(repository.stored.rounds == Array(original.rounds.prefix(3)))
-        // L'incohérence restante reste signalée, avec la seule manche 3.
-        #expect(model.inconsistency?.subsequentRoundIndices == [3])
+        #expect(repository.writeCount == 0)
+        #expect(repository.stored == original)
+        // L'incohérence reste signalée à l'identique ; une nouvelle tentative est possible.
+        #expect(model.inconsistency?.subsequentRoundIndices == [3, 4])
+        repository.failsWrites = false
+        let retry = try #require(model.inconsistency)
+        #expect(model.deleteRoundsAfterEarlyEnd(confirmed: retry))
+        #expect(repository.stored.rounds == Array(original.rounds.prefix(2)))
     }
 
     @Test("Décision périmée (données modifiées depuis l'affichage) : rien n'est supprimé")
@@ -553,9 +710,9 @@ struct HistoryModelTests {
         repository.replaceStored(changed)
 
         #expect(!model.deleteRoundsAfterEarlyEnd(confirmed: notice))
-        #expect(repository.deletionCount == 0)
+        #expect(repository.writeCount == 0)
         #expect(repository.stored.rounds.count == 3)
-        #expect(model.actionError != nil)
+        #expect(model.actionError == GameRepositoryError.staleEarlyEndDecision(gameID: original.id).userFacingMessage)
         #expect(model.inconsistency?.subsequentRoundIndices == [3])
     }
 
@@ -567,7 +724,7 @@ struct HistoryModelTests {
         let notice = try #require(model.inconsistency)
         #expect(!model.canResolveInconsistency)
         #expect(!model.deleteRoundsAfterEarlyEnd(confirmed: notice))
-        #expect(repository.deletionCount == 0)
+        #expect(repository.writeCount == 0)
         #expect(repository.stored.rounds.count == 4)
     }
 }

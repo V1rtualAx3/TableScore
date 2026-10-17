@@ -50,7 +50,8 @@ struct ScoreEntryRow: View {
     private var name: some View {
         Text(field.name)
             .font(Theme.Typography.playerName)
-            .lineLimit(2)
+            // Tailles d'accessibilité : prénom jamais tronqué (il est seul sur sa ligne).
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
             .accessibilityHidden(true) // déjà dans le libellé du champ et du bouton
     }
 
@@ -65,6 +66,8 @@ struct ScoreEntryRow: View {
         )
     }
 
+    /// Visuellement « ± » puis champ (pouce) ; VoiceOver lit d'abord le champ, puis le bouton
+    /// (priorités de lecture dans le conteneur).
     private var controls: some View {
         HStack(spacing: Theme.Spacing.s) {
             Button {
@@ -77,8 +80,8 @@ struct ScoreEntryRow: View {
             }
             // Style explicite : dans un `Form`, évite que toute la ligne déclenche le bouton.
             .buttonStyle(.bordered)
-            .accessibilityLabel(field.isNegative ? "Rendre positif" : "Rendre négatif")
-            .accessibilityHint("Score de \(field.name)")
+            .accessibilityLabel(signLabel)
+            .accessibilitySortPriority(0)
             .accessibilityIdentifier(AccessibilityID.Round.sign(position: field.position))
 
             TextField("—", text: textBinding)
@@ -90,9 +93,17 @@ struct ScoreEntryRow: View {
                 .frame(minWidth: fieldMinWidth, maxWidth: fieldMinWidth * 1.6, minHeight: Theme.Size.minTapTarget)
                 .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: Theme.Spacing.s))
                 .focused(focus, equals: field.participantID)
-                .accessibilityLabel("Score de \(field.name)")
+                .accessibilityLabel(Text(verbatim: "Score \(VerdictText.ofName(field.name))"))
                 .accessibilityValue(field.spokenValue)
+                .accessibilitySortPriority(1)
                 .accessibilityIdentifier(AccessibilityID.Round.score(position: field.position))
         }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// « Rendre négatif le score d'Alice » / « Rendre positif le score de Bob ».
+    private var signLabel: Text {
+        let action = field.isNegative ? "Rendre positif" : "Rendre négatif"
+        return Text(verbatim: "\(action) le score \(VerdictText.ofName(field.name))")
     }
 }

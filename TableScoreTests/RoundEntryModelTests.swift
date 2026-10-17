@@ -1,3 +1,5 @@
+// `InMemoryGameRepository` (et `simulatesWriteFailure`) n'existe qu'en Debug.
+#if DEBUG
 import Foundation
 import Testing
 import TableScoreKit
@@ -74,7 +76,7 @@ struct RoundEntryModelTests {
         #expect(line.roundScore == 20)
         #expect(line.isDoubled)
         #expect(line.totalAfter == 20)
-        #expect(line.closerDescription?.text == "Alice : 10 → 20 (score doublé : égalité avec Chloé)")
+        #expect(line.closerDescription?.text == "Alice\u{00A0}: 10 → 20 (score doublé\u{00A0}: égalité avec Chloé)")
         #expect(model.canSave)
         // Aperçu seulement : rien n'est écrit avant confirmation.
         #expect(try repository.game(id: Self.gameID).rounds.isEmpty)
@@ -88,7 +90,7 @@ struct RoundEntryModelTests {
 
         let line = try #require(Self.closerLine(model))
         #expect(line.roundScore == 24)
-        #expect(line.closerDescription?.text == "Alice : 12 → 24 (score doublé : Bob a fait moins)")
+        #expect(line.closerDescription?.text == "Alice\u{00A0}: 12 → 24 (score doublé\u{00A0}: Bob a fait moins)")
     }
 
     @Test("Égalité et score inférieur : « a fait moins » est prioritaire")
@@ -99,7 +101,7 @@ struct RoundEntryModelTests {
 
         let line = try #require(Self.closerLine(model))
         #expect(line.roundScore == 20)
-        #expect(line.closerDescription?.text == "Alice : 10 → 20 (score doublé : Bob a fait moins)")
+        #expect(line.closerDescription?.text == "Alice\u{00A0}: 10 → 20 (score doublé\u{00A0}: Bob a fait moins)")
     }
 
     @Test("10 contre 11 : non doublé, seul plus petit score")
@@ -111,7 +113,7 @@ struct RoundEntryModelTests {
         let line = try #require(Self.closerLine(model))
         #expect(line.roundScore == 10)
         #expect(!line.isDoubled)
-        #expect(line.closerDescription?.text == "Alice : 10 (seul plus petit score, pas de pénalité)")
+        #expect(line.closerDescription?.text == "Alice\u{00A0}: 10 (seul plus petit score, pas de pénalité)")
     }
 
     @Test("0 contre −1 : 0, zéro jamais doublé (saisie avec le bouton ±)")
@@ -128,7 +130,7 @@ struct RoundEntryModelTests {
         #expect(model.fields[1].status == .value(-1))
         let line = try #require(Self.closerLine(model))
         #expect(line.roundScore == 0)
-        #expect(line.closerDescription?.text == "Alice : 0 (zéro n'est jamais doublé)")
+        #expect(line.closerDescription?.text == "Alice\u{00A0}: 0 (zéro n'est jamais doublé)")
         let bobLine = try #require(model.preview?.lines.first { $0.participantID == bob })
         #expect(bobLine.roundScore == -1)
         #expect(bobLine.totalAfter == -1)
@@ -147,7 +149,7 @@ struct RoundEntryModelTests {
         let line = try #require(Self.closerLine(model))
         #expect(line.roundScore == -5)
         #expect(!line.isDoubled)
-        #expect(line.closerDescription?.text == "Alice : \u{2212}5 (score négatif, jamais doublé)")
+        #expect(line.closerDescription?.text == "Alice\u{00A0}: \u{2212}5 (score négatif, jamais doublé)")
         #expect(line.closerDescription?.spoken.contains("moins 5") == true)
     }
 
@@ -168,7 +170,7 @@ struct RoundEntryModelTests {
 
         let line = try #require(Self.closerLine(model))
         #expect(line.roundScore == 12)
-        #expect(line.closerDescription?.text == "Alice : 12 (pas de doublement : règle maison)")
+        #expect(line.closerDescription?.text == "Alice\u{00A0}: 12 (pas de doublement\u{00A0}: règle maison)")
     }
 
     @Test("Cumuls à venir : total avant → après, fin de partie annoncée")
@@ -186,7 +188,7 @@ struct RoundEntryModelTests {
         let alice = try #require(preview.lines.first)
         #expect(alice.totalBefore == 88)
         #expect(alice.totalAfter == 108)
-        #expect(alice.totalText == "Total : 88 → 108")
+        #expect(alice.totalText == "Total\u{00A0}: 88 → 108")
         #expect(preview.endsGameAtThisRound)
     }
 
@@ -247,7 +249,7 @@ struct RoundEntryModelTests {
         #expect(model.fields[0].message == nil) // saisie en cours : pas d'erreur affichée
         Self.enter(["\u{2212}", "4"], closer: 1, in: model)
         #expect(!model.canSave)
-        #expect(model.blockingReasons == ["score de Alice"])
+        #expect(model.blockingReasons == ["score d'Alice"])
 
         model.toggleSign(for: alice)
         #expect(model.fields[0].text.isEmpty)
@@ -280,7 +282,7 @@ struct RoundEntryModelTests {
 
         #expect(model.fields[0].status == .invalid)
         #expect(model.fields[0].message == "Nombre entier attendu")
-        #expect(model.blockingReasons == ["score de Alice à corriger"])
+        #expect(model.blockingReasons == ["score d'Alice à corriger"])
 
         #expect(model.fields[1].status == .unusual(200))
         #expect(model.fields[1].message?.contains("inhabituel") == true)
@@ -350,7 +352,7 @@ struct RoundEntryModelTests {
         let model = RoundEntryModel(gameID: Self.gameID, mode: .new, repository: repository)
         Self.enter(["1", "2"], closer: 0, in: model)
         #expect(!model.canSave)
-        #expect(model.blockingReasons == ["La partie est terminée : aucune manche ne peut être ajoutée."])
+        #expect(model.blockingReasons == ["La partie est terminée\u{00A0}: aucune manche ne peut être ajoutée."])
     }
 
     @Test("Partie inconnue : état d'erreur lisible")
@@ -398,20 +400,42 @@ struct RoundEntryModelTests {
             return
         }
         #expect(earlyEnd.laterRoundIDs == [roundIDs[2]])
+        #expect(decision.title == "La partie aurait dû se terminer")
         #expect(decision.message
-            == "Cette correction termine la partie à la manche 2. La manche suivante (3) devra être supprimée.")
+            == "Après cette correction, la partie se termine à la manche 2. La manche 3 a été jouée ensuite.")
+        #expect(decision.confirmTitle == "Supprimer la manche suivante")
+        #expect(decision.cancelTitle == "Revenir à la saisie")
+        #expect(decision.isDestructive)
         #expect(try repository.game(id: Self.gameID) == before)
 
-        // « Annuler la correction » : toujours rien d'écrit, saisie conservée.
+        // « Revenir à la saisie » : toujours rien d'écrit, saisie conservée.
         model.dismissDecision()
         #expect(model.pendingDecision == nil)
         #expect(model.fields[0].text == "60")
         #expect(try repository.game(id: Self.gameID) == before)
         #expect(model.save() == .needsDecision)
 
-        // Choix explicite : correction + suppression en une transaction.
+        // Premier choix destructif : seconde confirmation, toujours rien d'écrit.
         let pending = try #require(model.pendingDecision)
-        #expect(model.confirm(pending) == .saved)
+        #expect(model.confirm(pending) == .needsDecision)
+        #expect(model.pendingDecision == nil)
+        let confirmation = try #require(model.pendingDeletionConfirmation)
+        #expect(confirmation.finalConfirmationTitle == "Supprimer définitivement la manche 3\u{202F}?")
+        #expect(confirmation.finalConfirmationButtonTitle == "Supprimer la manche 3")
+        #expect(try repository.game(id: Self.gameID) == before)
+
+        // « Annuler » à la seconde confirmation : rien d'écrit, saisie conservée.
+        model.cancelLaterRoundsDeletion()
+        #expect(model.pendingDeletionConfirmation == nil)
+        #expect(try repository.game(id: Self.gameID) == before)
+        #expect(model.save() == .needsDecision)
+        let again = try #require(model.pendingDecision)
+        #expect(model.confirm(again) == .needsDecision)
+
+        // Seconde confirmation : correction + suppression en une transaction.
+        let finalConfirmation = try #require(model.pendingDeletionConfirmation)
+        #expect(model.confirmLaterRoundsDeletion(finalConfirmation) == .saved)
+        #expect(model.isCompleted)
         let after = try repository.game(id: Self.gameID)
         #expect(after.rounds.map(\.id) == [roundIDs[0], roundIDs[1]])
         #expect(after.rounds[0].entry(for: participants[0].id)?.rawScore == 60)
@@ -484,10 +508,54 @@ struct RoundEntryModelTests {
 
     @Test("Liste de prénoms en français")
     func joinedNames() {
-        #expect(PenaltyPreviewFormatter.joinedNames([]) == "")
-        #expect(PenaltyPreviewFormatter.joinedNames(["Bob"]) == "Bob")
-        #expect(PenaltyPreviewFormatter.joinedNames(["Bob", "Chloé"]) == "Bob et Chloé")
-        #expect(PenaltyPreviewFormatter.joinedNames(["Bob", "Chloé", "Dimitri"]) == "Bob, Chloé et Dimitri")
+        #expect(VerdictText.frenchList([]) == "")
+        #expect(VerdictText.frenchList(["Bob"]) == "Bob")
+        #expect(VerdictText.frenchList(["Bob", "Chloé"]) == "Bob et Chloé")
+        #expect(VerdictText.frenchList(["Bob", "Chloé", "Dimitri"]) == "Bob, Chloé et Dimitri")
+    }
+
+    @Test("Raisons du verdict : libellés de référence (docs/ux §3.2)")
+    func verdictReasons() {
+        let bob = Self.uuid(2)
+        let chloe = Self.uuid(3)
+        let names = [bob: "Bob", chloe: "Chloé"]
+        func reason(_ verdict: CloserVerdict) -> String {
+            VerdictText.reason(for: verdict, nameOf: { names[$0] ?? "" })
+        }
+        #expect(reason(.doubled(lowerParticipantIDs: [], tiedParticipantIDs: [chloe]))
+            == "score doublé\u{00A0}: égalité avec Chloé")
+        #expect(reason(.doubled(lowerParticipantIDs: [bob], tiedParticipantIDs: [chloe]))
+            == "score doublé\u{00A0}: Bob a fait moins")
+        #expect(reason(.doubled(lowerParticipantIDs: [bob, chloe], tiedParticipantIDs: []))
+            == "score doublé\u{00A0}: Bob et Chloé ont fait moins")
+        #expect(reason(.soleLowest) == "seul plus petit score, pas de pénalité")
+        #expect(reason(.zeroNeverDoubled) == "zéro n'est jamais doublé")
+        #expect(reason(.negativeNeverDoubled) == "score négatif, jamais doublé")
+        #expect(reason(.penaltyDisabledByHouseRules(lowerParticipantIDs: [bob], tiedParticipantIDs: []))
+            == "pas de doublement\u{00A0}: règle maison")
+    }
+
+    @Test("Complément du nom : élision devant une voyelle")
+    func elision() {
+        #expect(VerdictText.ofName("Alice") == "d'Alice")
+        #expect(VerdictText.ofName("Élodie") == "d'Élodie")
+        #expect(VerdictText.ofName("Bob") == "de Bob")
+        #expect(VerdictText.ofName("Hugo") == "de Hugo")
+    }
+
+    @Test("Aperçu du clôturant dans la zone d'action : absent tant que la saisie est incomplète")
+    func closerPreviewLine() throws {
+        let (repository, _, _) = try Self.makeRepository(names: ["Alice", "Bob", "Chloé"])
+        let model = RoundEntryModel(gameID: Self.gameID, mode: .new, repository: repository)
+        Self.enter(["10", "24", ""], closer: 0, in: model)
+        #expect(model.closerPreviewLine == nil)
+        #expect(model.blockingSummary != nil)
+
+        model.setText("10", for: model.fields[2].participantID)
+        let line = try #require(model.closerPreviewLine)
+        #expect(line.closerDescription?.text == "Alice\u{00A0}: 10 → 20 (score doublé\u{00A0}: égalité avec Chloé)")
+        #expect(line.isDoubled)
+        #expect(model.blockingSummary == nil)
     }
 
     @Test("Plusieurs joueurs à égalité ou plus bas : accord du verbe")
@@ -496,17 +564,17 @@ struct RoundEntryModelTests {
         let model = RoundEntryModel(gameID: Self.gameID, mode: .new, repository: repository)
         Self.enter(["10", "10", "10"], closer: 0, in: model)
         #expect(Self.closerLine(model)?.closerDescription?.detail
-            == "10 → 20 (score doublé : égalité avec Bob et Chloé)")
+            == "10 → 20 (score doublé\u{00A0}: égalité avec Bob et Chloé)")
 
         Self.enter(["10", "2", "3"], closer: 0, in: model)
         #expect(Self.closerLine(model)?.closerDescription?.detail
-            == "10 → 20 (score doublé : Bob et Chloé ont fait moins)")
+            == "10 → 20 (score doublé\u{00A0}: Bob et Chloé ont fait moins)")
     }
 
     @Test("Message de fin anticipée avec plusieurs manches")
     func earlyEndMessagePlural() {
         #expect(PenaltyPreviewFormatter.earlyEndMessage(endingRoundIndex: 6, laterRoundIndices: [7, 8, 9])
-            == "Cette correction termine la partie à la manche 6. Les manches suivantes (7 à 9) devront être supprimées.")
+            == "Après cette correction, la partie se termine à la manche 6. Les manches 7 à 9 ont été jouées ensuite.")
         #expect(PenaltyPreviewFormatter.deleteLaterRoundsTitle(count: 3) == "Supprimer les manches suivantes")
     }
 
@@ -515,3 +583,4 @@ struct RoundEntryModelTests {
         #expect(RoundEntryModel.usualScores == -24...144)
     }
 }
+#endif

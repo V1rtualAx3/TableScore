@@ -41,9 +41,9 @@ final class RoundEntryUITests: XCTestCase {
 
         robot.typeScore("5", position: 0)
         let sign = robot.app.buttons["round.sign.0"]
-        XCTAssertEqual(sign.label, "Rendre négatif")
+        XCTAssertEqual(sign.label, "Rendre négatif le score d'Alice")
         sign.tap()
-        XCTAssertEqual(sign.label, "Rendre positif", "Le score d'Alice doit être devenu négatif.")
+        XCTAssertEqual(sign.label, "Rendre positif le score d'Alice", "Le score d'Alice doit être devenu négatif.")
         robot.typeScore("0", position: 1)
         robot.typeScore("3", position: 2)
         robot.tapRevealing(robot.app.buttons["round.closer.1"])

@@ -5,7 +5,7 @@ import TableScoreKit
 ///
 /// **Mise en forme uniquement** : la décision (doublé ou non, score retenu, joueurs ayant fait
 /// moins ou égalité) provient toujours de `ScoreEngine` via `CloserVerdict` et `RoundScoring`.
-/// Aucune multiplication, aucune comparaison de scores ici.
+/// Aucune multiplication, aucune comparaison de scores ici. Raisons du verdict : `VerdictText`.
 enum PenaltyPreviewFormatter {
     /// Texte visible et texte lu par VoiceOver (sans flèche, nombres négatifs lus « moins 3 »).
     struct Description: Equatable, Sendable {
@@ -28,53 +28,22 @@ enum PenaltyPreviewFormatter {
         nameOf: (UUID) -> String
     ) -> Description {
         let raw = ScoreFormat.display(rawScore)
-        let spokenRaw = ScoreFormat.spoken(rawScore)
+        let reason = VerdictText.reason(for: verdict, nameOf: nameOf)
         let detail: String
-        let spoken: String
-
-        switch verdict {
-        case .doubled(let lowerIDs, let tiedIDs):
-            let reason = doublingReason(lowerIDs: lowerIDs, tiedIDs: tiedIDs, nameOf: nameOf)
-            let effective = ScoreFormat.display(effectiveScore)
-            detail = "\(raw) → \(effective) (score doublé : \(reason))"
-            spoken = "\(name) a terminé la manche : \(spokenRaw), doublé à "
-                + "\(ScoreFormat.spoken(effectiveScore)). Score doublé : \(reason)."
-        case .soleLowest:
-            detail = "\(raw) (seul plus petit score, pas de pénalité)"
-            spoken = "\(name) a terminé la manche : \(spokenRaw). Seul plus petit score, pas de pénalité."
-        case .zeroNeverDoubled:
-            detail = "\(raw) (zéro n'est jamais doublé)"
-            spoken = "\(name) a terminé la manche : \(spokenRaw). Zéro n'est jamais doublé."
-        case .negativeNeverDoubled:
-            detail = "\(raw) (score négatif, jamais doublé)"
-            spoken = "\(name) a terminé la manche : \(spokenRaw). Score négatif, jamais doublé."
-        case .penaltyDisabledByHouseRules:
-            detail = "\(raw) (pas de doublement : règle maison)"
-            spoken = "\(name) a terminé la manche : \(spokenRaw). Pas de doublement : règle maison."
+        var spoken = "\(name) a terminé la manche\(VerdictText.nbsp): \(ScoreFormat.spoken(rawScore))"
+        if verdict.isDoubled {
+            detail = "\(raw) → \(ScoreFormat.display(effectiveScore)) (\(reason))"
+            spoken += ", doublé à \(ScoreFormat.spoken(effectiveScore))"
+        } else {
+            detail = "\(raw) (\(reason))"
         }
-        return Description(text: "\(name) : \(detail)", detail: detail, spoken: spoken)
-    }
-
-    /// « Bob a fait moins », « Bob et Chloé ont fait moins », « égalité avec Chloé ».
-    static func doublingReason(lowerIDs: [UUID], tiedIDs: [UUID], nameOf: (UUID) -> String) -> String {
-        if !lowerIDs.isEmpty {
-            let names = joinedNames(lowerIDs.map(nameOf))
-            return lowerIDs.count == 1 ? "\(names) a fait moins" : "\(names) ont fait moins"
-        }
-        return "égalité avec \(joinedNames(tiedIDs.map(nameOf)))"
-    }
-
-    /// Liste française : « A », « A et B », « A, B et C ». Indépendante de la langue de l'appareil
-    /// (les textes de l'app sont en français).
-    static func joinedNames(_ names: [String]) -> String {
-        guard let last = names.last else { return "" }
-        guard names.count > 1 else { return last }
-        return names.dropLast().joined(separator: ", ") + " et " + last
+        spoken += ". \(VerdictText.sentenceCase(reason))."
+        return Description(text: "\(name)\(VerdictText.nbsp): \(detail)", detail: detail, spoken: spoken)
     }
 
     /// Évolution du total : « Total : 88 → 108 ».
     static func totalText(before: Int, after: Int) -> String {
-        "Total : \(ScoreFormat.display(before)) → \(ScoreFormat.display(after))"
+        "Total\(VerdictText.nbsp): \(ScoreFormat.display(before)) → \(ScoreFormat.display(after))"
     }
 
     /// Lecture VoiceOver d'une ligne d'aperçu.
@@ -84,24 +53,23 @@ enum PenaltyPreviewFormatter {
         totalAfter: Int,
         closer: Description?
     ) -> String {
-        let total = "Total après la manche : \(ScoreFormat.spoken(totalAfter)) points."
+        let total = "Total après la manche\(VerdictText.nbsp): \(ScoreFormat.spoken(totalAfter)) points."
         if let closer {
             return "\(closer.spoken) \(total)"
         }
-        return "\(name) : \(ScoreFormat.spoken(roundScore)) points pour la manche. \(total)"
+        return "\(name)\(VerdictText.nbsp): \(ScoreFormat.spoken(roundScore)) points pour la manche. \(total)"
     }
 
     /// Message de l'alerte de fin anticipée (§4.6) ; `laterRoundIndices` triés, non vides.
+    /// « Après cette correction, la partie se termine à la manche 6. Les manches 7 à 9 ont été
+    /// jouées ensuite. »
     static func earlyEndMessage(endingRoundIndex: Int, laterRoundIndices: [Int]) -> String {
-        let head = "Cette correction termine la partie à la manche \(endingRoundIndex)."
-        guard let first = laterRoundIndices.first, let last = laterRoundIndices.last else { return head }
-        if laterRoundIndices.count == 1 {
-            return head + " La manche suivante (\(first)) devra être supprimée."
-        }
-        return head + " Les manches suivantes (\(first) à \(last)) devront être supprimées."
+        let head = "Après cette correction, la partie se termine à la manche \(endingRoundIndex)."
+        guard !laterRoundIndices.isEmpty else { return head }
+        return head + " " + LaterRoundsText.playedAfterSentence(laterRoundIndices)
     }
 
-    /// Bouton destructif de l'alerte de fin anticipée.
+    /// Bouton destructif de l'alerte de fin anticipée (accord au singulier pour une seule manche).
     static func deleteLaterRoundsTitle(count: Int) -> String {
         count == 1 ? "Supprimer la manche suivante" : "Supprimer les manches suivantes"
     }

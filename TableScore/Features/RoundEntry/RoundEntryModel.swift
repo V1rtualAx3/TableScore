@@ -61,7 +61,7 @@ final class RoundEntryModel {
             case .invalid:
                 "Nombre entier attendu"
             case .unusual:
-                "Score inhabituel : vérifiez la saisie (habituellement entre "
+                "Score inhabituel\u{00A0}: vérifiez la saisie (habituellement entre "
                     + "\(ScoreFormat.display(RoundEntryModel.usualScores.lowerBound)) et "
                     + "\(ScoreFormat.display(RoundEntryModel.usualScores.upperBound)))."
             case .empty, .signOnly, .value:
@@ -137,18 +137,24 @@ final class RoundEntryModel {
         var confirmTitle: String {
             PenaltyPreviewFormatter.deleteLaterRoundsTitle(count: laterRoundIDs.count)
         }
+
+        /// Seconde confirmation (comme dans l'historique) : « Supprimer définitivement 3 manches ? ».
+        var finalConfirmationTitle: String { LaterRoundsText.deletionTitle(laterRoundIndices) }
+        var finalConfirmationMessage: String { LaterRoundsText.deletionMessage(laterRoundIndices) }
+        var finalConfirmationButtonTitle: String { LaterRoundsText.deletionButton(laterRoundIndices) }
     }
 
-    /// Décision explicite demandée avant toute écriture.
+    /// Décision explicite demandée avant toute écriture (docs/ux/lot2-parcours.md §2.5).
     enum Decision: Equatable, Sendable {
         /// §4.6 : la correction termine la partie plus tôt ; manches postérieures à supprimer.
+        /// Le choix destructif mène à une **seconde** confirmation (`pendingDeletionConfirmation`).
         case deleteLaterRounds(EarlyEndDecision)
         /// La partie était terminée ; après correction, plus personne n'atteint le seuil.
         case gameResumes(targetScore: Int)
 
         var title: String {
             switch self {
-            case .deleteLaterRounds: "Fin de partie anticipée"
+            case .deleteLaterRounds: "La partie aurait dû se terminer"
             case .gameResumes: "La partie reprend"
             }
         }
@@ -158,7 +164,7 @@ final class RoundEntryModel {
             case .deleteLaterRounds(let decision):
                 decision.message
             case .gameResumes(let targetScore):
-                "Plus aucun joueur n'atteint \(targetScore) points : la partie reprend."
+                "Plus aucun joueur n'atteint \(targetScore) points\u{00A0}: la partie reprend."
             }
         }
 
@@ -169,12 +175,8 @@ final class RoundEntryModel {
             }
         }
 
-        var cancelTitle: String {
-            switch self {
-            case .deleteLaterRounds: "Annuler la correction"
-            case .gameResumes: "Revenir à la saisie"
-            }
-        }
+        /// Annule la décision : rien n'est écrit, la saisie est conservée.
+        var cancelTitle: String { "Revenir à la saisie" }
 
         var isDestructive: Bool {
             if case .deleteLaterRounds = self { return true }
@@ -230,6 +232,8 @@ final class RoundEntryModel {
     private(set) var hasWrittenData = false
     private(set) var saveErrorMessage: String?
     private(set) var pendingDecision: Decision?
+    /// Seconde confirmation de la suppression des manches postérieures (après `confirm`).
+    private(set) var pendingDeletionConfirmation: EarlyEndDecision?
 
     private var game: SavedGame?
     private var draft: RoundDraft?
@@ -238,8 +242,11 @@ final class RoundEntryModel {
     /// Manches dont la suppression a été confirmée pour la saisie courante.
     private var confirmedLaterRoundIDs: Set<UUID>?
     private var confirmedResume = false
-    /// Partie `finished` rouverte par cette feuille pour la correction.
+    /// Partie `finished` rouverte par cette feuille pour l'enregistrement et pas encore rétablie
+    /// (« terminée ») : seul état intermédiaire possible, résorbé dès que possible.
     private var reopenedFinishedGame = false
+    /// Correction d'une partie terminée impossible : une autre partie est en cours (lu au chargement).
+    private var anotherGameIsActive = false
 
     init(gameID: UUID, mode: RoundEntryMode, repository: any GameRepository) {
         self.gameID = gameID
@@ -269,6 +276,16 @@ final class RoundEntryModel {
         loadState == .loaded && draft != nil && blockingReasons.isEmpty && preview != nil
             && !isSaving && !isCompleted
     }
+
+    /// Ligne courte du clôturant, affichée au-dessus du bouton dès que la saisie est complète :
+    /// « Alice : 10 → 20 (score doublé : égalité avec Chloé) » (libellé du moteur, cf. aperçu).
+    var closerPreviewLine: PreviewLine? {
+        preview?.lines.first { $0.isCloser && $0.closerDescription != nil }
+    }
+
+    /// Vrai tant qu'une partie terminée, rouverte pour enregistrer, n'a pas retrouvé son statut :
+    /// la feuille ne doit pas pouvoir être fermée par glissement sans ce rétablissement.
+    var needsLifecycleRestore: Bool { reopenedFinishedGame }
 
     /// Saisie modifiée depuis l'ouverture (confirmation avant abandon).
     var isDirty: Bool {
@@ -330,7 +347,7 @@ final class RoundEntryModel {
     /// Enregistre la manche (ajout) ou la correction. Synchrone : le dépôt est local et atomique.
     @discardableResult
     func save() -> SaveOutcome {
-        guard !isSaving, !isCompleted, pendingDecision == nil, canSave,
+        guard !isSaving, !isCompleted, pendingDecision == nil, pendingDeletionConfirmation == nil, canSave,
               let game, let draft,
               let input = try? draft.makeRoundInput()
         else { return .ignored }
@@ -345,42 +362,80 @@ final class RoundEntryModel {
         }
     }
 
-    /// Choix explicite de l'utilisateur dans l'alerte de décision, puis enregistrement.
+    /// Choix explicite de l'utilisateur dans l'alerte de décision.
+    ///
+    /// - `.gameResumes` : enregistre la correction.
+    /// - `.deleteLaterRounds` : **aucune écriture** ; demande la seconde confirmation
+    ///   (`pendingDeletionConfirmation`, renvoie `.needsDecision`).
     @discardableResult
     func confirm(_ decision: Decision) -> SaveOutcome {
+        pendingDecision = nil
         switch decision {
         case .deleteLaterRounds(let earlyEnd):
-            confirmedLaterRoundIDs = Set(earlyEnd.laterRoundIDs)
+            pendingDeletionConfirmation = earlyEnd
+            return .needsDecision
         case .gameResumes:
             confirmedResume = true
+            return save()
         }
-        pendingDecision = nil
+    }
+
+    /// Seconde confirmation « Supprimer définitivement… » : correction + suppression des manches
+    /// confirmées en une seule transaction (identifiants revérifiés par le dépôt).
+    ///
+    /// Le paramètre est la décision affichée (et non l'état courant) : la fermeture de la boîte
+    /// de dialogue peut remettre `pendingDeletionConfirmation` à `nil` avant cet appel.
+    @discardableResult
+    func confirmLaterRoundsDeletion(_ earlyEnd: EarlyEndDecision) -> SaveOutcome {
+        pendingDeletionConfirmation = nil
+        confirmedLaterRoundIDs = Set(earlyEnd.laterRoundIDs)
         return save()
     }
 
-    /// « Annuler la correction » / « Revenir à la saisie » : rien n'est écrit, saisie conservée.
+    /// « Revenir à la saisie » (alerte) : rien n'est écrit, saisie conservée.
     func dismissDecision() {
         pendingDecision = nil
+    }
+
+    /// « Annuler » (seconde confirmation) : rien n'est écrit, saisie conservée.
+    func cancelLaterRoundsDeletion() {
+        pendingDeletionConfirmation = nil
     }
 
     func dismissSaveError() {
         saveErrorMessage = nil
     }
 
-    /// À appeler avant de fermer la feuille sans enregistrer. Si une partie terminée a été
-    /// rouverte sans que la correction aboutisse, elle retrouve son statut « terminée ».
-    /// Renvoie vrai si le dépôt a été modifié (les écrans doivent se recharger).
+    /// À appeler avant de fermer la feuille (bouton, glissement ou fin d'enregistrement).
+    /// Filet de sécurité : si une partie terminée, rouverte pour enregistrer, n'a pas pu retrouver
+    /// son statut (double échec d'écriture), une dernière tentative est faite.
+    /// Renvoie vrai si le dépôt a été modifié pendant la session (les écrans doivent se recharger).
     func prepareForDismissal() -> Bool {
-        if reopenedFinishedGame && !isCompleted {
-            do {
-                _ = try repository.finishGame(id: gameID)
-                reopenedFinishedGame = false
-            } catch {
-                // État valide et sans perte (la partie reste simplement active, visible à
-                // l'accueil) ; la fermeture de la feuille ne doit pas être bloquée.
-            }
-        }
+        restoreLifecycleIfNeeded()
         return hasWrittenData
+    }
+
+    /// Rétablit le statut « terminée » d'une partie rouverte par cette feuille si le moteur la
+    /// considère toujours terminée. Renvoie vrai si une écriture a eu lieu. En cas d'échec, l'état
+    /// reste valide et sans perte (partie simplement active, visible à l'accueil) ; la fermeture
+    /// de la feuille n'est jamais bloquée.
+    @discardableResult
+    func restoreLifecycleIfNeeded() -> Bool {
+        guard reopenedFinishedGame else { return false }
+        do {
+            let current = try repository.game(id: gameID)
+            guard current.lifecycle == .active, current.isOver else {
+                // Déjà rétablie, ou reprise confirmée et enregistrée : la partie reste telle quelle.
+                reopenedFinishedGame = false
+                return false
+            }
+            game = try repository.finishGame(id: gameID)
+            reopenedFinishedGame = false
+            hasWrittenData = true
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: Chargement
@@ -413,6 +468,15 @@ final class RoundEntryModel {
                     text: text,
                     status: Self.status(for: text)
                 ))
+            }
+            if case .edit = mode, loaded.lifecycle == .finished {
+                // Lecture seule : la réouverture à l'enregistrement serait refusée. Une erreur de
+                // lecture ici n'empêche pas la saisie (l'enregistrement la signalerait).
+                if let active = try? repository.activeGame() {
+                    anotherGameIsActive = active.id != loaded.id
+                } else {
+                    anotherGameIsActive = false
+                }
             }
             game = loaded
             draft = newDraft
@@ -460,19 +524,19 @@ final class RoundEntryModel {
         let emptyFields = missingFields.filter { $0.status != .invalid }
         for field in missingFields {
             reasons.append(field.status == .invalid
-                ? "score de \(field.name) à corriger"
-                : "score de \(field.name)")
+                ? "score \(VerdictText.ofName(field.name)) à corriger"
+                : "score \(VerdictText.ofName(field.name))")
         }
         // Résumé court : au-delà de deux joueurs, un décompte plutôt qu'une liste de prénoms.
         if emptyFields.count > 2 {
             summaryItems.append("\(emptyFields.count) scores")
         } else {
-            summaryItems += emptyFields.map { "score de \($0.name)" }
+            summaryItems += emptyFields.map { "score \(VerdictText.ofName($0.name))" }
         }
         if invalidFields.count > 2 {
             summaryItems.append("\(invalidFields.count) scores à corriger")
         } else {
-            summaryItems += invalidFields.map { "score de \($0.name) à corriger" }
+            summaryItems += invalidFields.map { "score \(VerdictText.ofName($0.name)) à corriger" }
         }
         if draft.closingParticipantID == nil {
             reasons.append("qui a terminé la manche")
@@ -483,8 +547,8 @@ final class RoundEntryModel {
             preview = nil
             setBlocking(
                 reasons,
-                summary: "À compléter : " + summaryItems.joined(separator: ", ") + ".",
-                hint: "Il manque : " + reasons.joined(separator: ", ") + "."
+                summary: "À compléter\u{00A0}: " + summaryItems.joined(separator: ", ") + ".",
+                hint: "Il manque\u{00A0}: " + reasons.joined(separator: ", ") + "."
             )
             return
         }
@@ -508,6 +572,8 @@ final class RoundEntryModel {
 
     private func lifecycleBlockingMessage(for game: SavedGame) -> String? {
         switch (mode, game.lifecycle) {
+        case (.edit, .finished) where anotherGameIsActive:
+            CorrectionText.anotherGameActive
         case (.new, .active), (.edit, .active), (.edit, .finished):
             nil
         case (.new, _), (.edit, .archived):
@@ -636,7 +702,9 @@ final class RoundEntryModel {
         }
 
         do {
-            // Correction d'une partie close : réouverture uniquement sur action de l'utilisateur.
+            // Partie terminée : réouverture **au moment d'enregistrer** seulement (ouvrir, saisir,
+            // annuler ou glisser la feuille n'écrit rien) ; statut rétabli juste après si la partie
+            // est toujours terminée, ou immédiatement en cas d'échec.
             if game.lifecycle == .finished && !reopenedFinishedGame {
                 _ = try repository.reopenGame(id: gameID)
                 reopenedFinishedGame = true
@@ -645,34 +713,39 @@ final class RoundEntryModel {
             switch try repository.replaceRound(input, inGame: gameID, resolution: resolution) {
             case .saved(let updated, _):
                 hasWrittenData = true
-                try restoreFinishedLifecycleIfNeeded(updated)
+                self.game = updated
             case .unchanged(let updated):
-                try restoreFinishedLifecycleIfNeeded(updated)
+                self.game = updated
             case .requiresDecision(let conflict):
                 // Décision périmée ou partielle : rien n'a été écrit, on redemande.
+                restoreLifecycleIfNeeded()
                 confirmedLaterRoundIDs = nil
                 pendingDecision = .deleteLaterRounds(
                     Self.earlyEndDecision(conflict.inconsistency, in: conflict.preview)
                 )
                 return .needsDecision
             }
+            // Correction enregistrée : « terminée » rétabli si le moteur la juge toujours terminée
+            // (un échec ici n'annule pas la correction ; nouvelle tentative à la fermeture).
+            restoreLifecycleIfNeeded()
             complete()
             return .saved
         } catch {
-            saveErrorMessage = GameRepositoryError.from(error, operation: .write).userFacingMessage
+            // Correction non enregistrée : la partie rouverte retrouve aussitôt son statut.
+            restoreLifecycleIfNeeded()
+            saveErrorMessage = Self.saveMessage(for: GameRepositoryError.from(error, operation: .write))
             return .failed
         }
     }
 
-    /// Une partie close rouverte pour correction redevient « terminée » si elle l'est toujours.
-    private func restoreFinishedLifecycleIfNeeded(_ updated: SavedGame) throws(GameRepositoryError) {
-        guard reopenedFinishedGame, updated.isOver else { return }
-        game = try repository.finishGame(id: gameID)
-        reopenedFinishedGame = false
+    private static func saveMessage(for error: GameRepositoryError) -> String {
+        if case .anotherGameActive = error { return CorrectionText.anotherGameActive }
+        return error.userFacingMessage
     }
 
     private func complete() {
         pendingDecision = nil
+        pendingDeletionConfirmation = nil
         saveErrorMessage = nil
         isCompleted = true
     }
@@ -717,7 +790,7 @@ final class RoundEntryModel {
         }
         switch validationError.underlyingReason {
         case .gameAlreadyFinished:
-            return "La partie est terminée : aucune manche ne peut être ajoutée."
+            return "La partie est terminée\u{00A0}: aucune manche ne peut être ajoutée."
         case .arithmeticOverflow:
             return "Un score est trop grand pour être calculé."
         default:

@@ -200,6 +200,33 @@ final class SwiftDataGameRepository: GameRepository {
         return deletion
     }
 
+    func deleteRoundsAfterEarlyEnd(
+        gameID: UUID,
+        confirmedRoundIDs: [UUID]
+    ) throws(GameRepositoryError) -> SavedGame {
+        discardPendingChanges()
+        let record = try requireRecord(id: gameID)
+        let plan = try GameWritePlanner.planDeleteRoundsAfterEarlyEnd(
+            try map(record),
+            confirmedRoundIDs: confirmedRoundIDs,
+            at: now()
+        )
+        let removedIDs = Set(plan.removedRounds.map(\.id))
+        let doomed = record.rounds.filter { removedIDs.contains($0.roundID) }
+        // Chaque manche supprimée doit correspondre à exactement un enregistrement.
+        guard doomed.count == removedIDs.count, Set(doomed.map(\.roundID)) == removedIDs else {
+            let missing = removedIDs.subtracting(doomed.map(\.roundID)).first ?? gameID
+            throw GameRepositoryError.corruptedData(gameID: gameID, .missingRoundRecord(roundID: missing))
+        }
+        for roundRecord in doomed {
+            context.delete(roundRecord)
+        }
+        RecordMapper.apply(plan.game, toHeaderOf: record)
+        // Une seule sauvegarde : toutes les manches ou aucune (contexte abandonné en cas d'échec).
+        try commit()
+        return plan.game
+    }
+
     func finishGame(id: UUID) throws(GameRepositoryError) -> SavedGame {
         discardPendingChanges()
         let record = try requireRecord(id: id)

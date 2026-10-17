@@ -1,7 +1,12 @@
+#if DEBUG
 import Foundation
 import TableScoreKit
 
 /// Dépôt volatil pour les previews SwiftUI et les tests de view models.
+///
+/// **Debug uniquement** : le type entier est exclu des builds Release (contrôlé par
+/// `scripts/ci/check-release-symbols.sh`) ; l'application distribuée n'utilise que
+/// `SwiftDataGameRepository`.
 ///
 /// Même contrat et mêmes décisions que `SwiftDataGameRepository` (via `GameWritePlanner`) ;
 /// chaque écriture remplace l'état en une seule affectation (tout ou rien).
@@ -12,14 +17,18 @@ final class InMemoryGameRepository: GameRepository {
     private var games: [UUID: SavedGame] = [:]
     private let now: @MainActor () -> Date
 
-    #if DEBUG
     /// Permet de vérifier l'affichage d'une erreur d'enregistrement : chaque écriture échoue
     /// (rien n'est modifié) tant que la valeur est vraie. Ne simule jamais un succès.
     var simulatesWriteFailure = false
-    #endif
 
     init(now: @escaping @MainActor () -> Date = { Date() }) {
         self.now = now
+    }
+
+    /// Tests uniquement : enregistre une partie telle quelle, sans passer par les contrôles
+    /// d'écriture (reproduit des données anciennes, ex. fin anticipée déjà enregistrée).
+    func insertUncheckedForTesting(_ game: SavedGame) {
+        games[game.id] = game
     }
 
     // MARK: Lecture
@@ -114,6 +123,19 @@ final class InMemoryGameRepository: GameRepository {
         return deletion
     }
 
+    func deleteRoundsAfterEarlyEnd(
+        gameID: UUID,
+        confirmedRoundIDs: [UUID]
+    ) throws(GameRepositoryError) -> SavedGame {
+        let plan = try GameWritePlanner.planDeleteRoundsAfterEarlyEnd(
+            try game(id: gameID),
+            confirmedRoundIDs: confirmedRoundIDs,
+            at: now()
+        )
+        try commit([plan.game])
+        return plan.game
+    }
+
     func finishGame(id: UUID) throws(GameRepositoryError) -> SavedGame {
         let current = try game(id: id)
         guard let updated = try GameWritePlanner.planFinish(current, at: now()) else { return current }
@@ -164,10 +186,9 @@ final class InMemoryGameRepository: GameRepository {
     }
 
     private func failIfSimulated() throws(GameRepositoryError) {
-        #if DEBUG
         if simulatesWriteFailure {
             throw GameRepositoryError.storageFailure(.write, message: "Échec d'écriture simulé.")
         }
-        #endif
     }
 }
+#endif

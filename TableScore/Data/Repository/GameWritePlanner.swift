@@ -194,6 +194,52 @@ enum GameWritePlanner {
         return RoundDeletion(deletedRound: last, game: updated)
     }
 
+    /// Résolution d'une fin anticipée déjà enregistrée : partie recalculée sans les manches
+    /// postérieures à la fin, et liste exacte des manches supprimées.
+    struct EarlyEndDeletionPlan: Sendable, Hashable {
+        let game: SavedGame
+        let removedRounds: [RoundInput]
+    }
+
+    /// Plan pur de `GameRepository.deleteRoundsAfterEarlyEnd` (contrat détaillé sur le protocole).
+    ///
+    /// Invariants vérifiés : identifiants confirmés == `subsequentRoundIDs` du moteur (ensemble et
+    /// cardinal) ; après suppression, partie terminée selon le moteur et sans incohérence ; statut
+    /// inchangé (`finished` conserve sa date de fin, jamais de réouverture).
+    static func planDeleteRoundsAfterEarlyEnd(
+        _ game: SavedGame,
+        confirmedRoundIDs: [UUID],
+        at date: Date
+    ) throws(GameRepositoryError) -> EarlyEndDeletionPlan {
+        guard game.lifecycle != .archived else {
+            throw GameRepositoryError.gameNotActive(id: game.id, lifecycle: game.lifecycle)
+        }
+        guard let inconsistency = game.computation.inconsistency,
+              !inconsistency.subsequentRoundIDs.isEmpty
+        else {
+            throw GameRepositoryError.staleEarlyEndDecision(gameID: game.id)
+        }
+        let toRemove = Set(inconsistency.subsequentRoundIDs)
+        // Décision périmée, partielle ou dupliquée : on redemande plutôt que d'effacer autre chose.
+        guard confirmedRoundIDs.count == toRemove.count, Set(confirmedRoundIDs) == toRemove else {
+            throw GameRepositoryError.staleEarlyEndDecision(gameID: game.id)
+        }
+        let kept = game.rounds.filter { !toRemove.contains($0.id) }
+        let removed = game.rounds.filter { toRemove.contains($0.id) }
+        guard removed.count == toRemove.count else {
+            throw GameRepositoryError.staleEarlyEndDecision(gameID: game.id)
+        }
+        var updated = try rebuilt(game, rounds: kept, roundInfo: game.roundInfo, at: date)
+        // Garde-fou (invariant du moteur) : la manche de fin devient la dernière manche.
+        guard updated.isOver, updated.computation.inconsistency == nil else {
+            throw GameRepositoryError.staleEarlyEndDecision(gameID: game.id)
+        }
+        if updated.lifecycle == .finished && updated.finishedAt == nil {
+            updated = updated.updatingLifecycle(.finished, updatedAt: date, finishedAt: date, archivedAt: nil)
+        }
+        return EarlyEndDeletionPlan(game: updated, removedRounds: removed)
+    }
+
     // MARK: Cycle de vie
 
     /// `nil` : déjà terminée, aucune écriture.

@@ -3,11 +3,10 @@ import XCTest
 /// Historique et correction (cahier §4.6, §10 n° 11–12 ; docs/ux/lot2-parcours.md §2.5).
 ///
 /// Jeu `withHistory` : partie active Alice/Bob/Chloé/Dimitri, 4 manches, totaux 41/60/34/53.
-/// Dépendances : accès à l'historique via le tableau (T3 : `game.menu` → `game.menu.history`, ou
-/// `game.historyLink`) ; formulaire de correction et alerte de fin anticipée (T4 :
-/// `round.score.<position>`, `round.save`, `round.cancel`, bouton « Revenir à la saisie »).
-/// Tant que le formulaire T4 n'existe pas, les étapes qui en dépendent sont marquées « ignorées »
-/// (`XCTSkip`) avec un message explicite, jamais réussies par défaut.
+/// Accès à l'historique par le lien du tableau (`game.historyLink`, bouton ordinaire : plus
+/// robuste qu'un élément de `Menu`) ; formulaire de correction (`round.score.<position>`,
+/// `round.save`, `round.cancel`) ; alerte « La partie aurait dû se terminer ». Aucune étape
+/// ignorée : chaque test vérifie réellement son scénario.
 final class HistoryUITests: XCTestCase {
     private let timeout: TimeInterval = 10
 
@@ -33,9 +32,7 @@ final class HistoryUITests: XCTestCase {
         )
 
         let chloeField = app.textFields["round.score.2"]
-        guard chloeField.waitForExistence(timeout: timeout) else {
-            throw XCTSkip("Formulaire de correction (T4) indisponible : recalcul non vérifié.")
-        }
+        XCTAssertTrue(chloeField.waitForExistence(timeout: timeout), "Champ du score de Chloé attendu.")
         replaceText(in: chloeField, with: "11")
         let save = app.buttons["round.save"]
         XCTAssertTrue(save.waitForExistence(timeout: timeout))
@@ -84,7 +81,6 @@ final class HistoryUITests: XCTestCase {
 
     /// Correction de la manche 1 qui fait atteindre 100 points à Dimitri : une décision explicite est
     /// demandée (§10 n° 12) ; « Revenir à la saisie » puis abandon : rien n'est effacé.
-    /// Dépend de T4 (formulaire + alerte « La partie aurait dû se terminer »).
     @MainActor
     func testCorrectionCreatesEarlyFinishRequiresChoice() throws {
         let app = XCUIApplication()
@@ -96,17 +92,11 @@ final class HistoryUITests: XCTestCase {
         firstRound.tap()
         XCTAssertTrue(waitForEntrySheet(app), "Toucher une manche doit ouvrir la feuille de correction.")
 
-        let dimitriField = app.textFields["round.score.3"]
-        guard dimitriField.waitForExistence(timeout: timeout) else {
-            throw XCTSkip("Formulaire de correction (T4) indisponible : fin anticipée non vérifiée.")
-        }
-        replaceText(in: dimitriField, with: "100")
-        let save = app.buttons["round.save"]
-        XCTAssertTrue(save.waitForExistence(timeout: timeout))
-        save.tap()
-
-        let alert = app.alerts.firstMatch
-        XCTAssertTrue(alert.waitForExistence(timeout: timeout), "Une décision explicite doit être demandée.")
+        let alert = submitDimitriAtHundred(app)
+        XCTAssertTrue(
+            alert.buttons["Supprimer les manches suivantes"].exists,
+            "Choix destructif attendu : \(alert.buttons.allElementsBoundByIndex.map(\.label))"
+        )
         let back = alert.buttons["Revenir à la saisie"]
         XCTAssertTrue(back.exists, "Choix « Revenir à la saisie » attendu : \(alert.buttons.allElementsBoundByIndex.map(\.label))")
         back.tap()
@@ -128,26 +118,70 @@ final class HistoryUITests: XCTestCase {
         XCTAssertTrue(unchanged.label.contains("Dimitri 15, total 15"), unchanged.label)
     }
 
+    /// Même correction, puis « Supprimer les manches suivantes » et seconde confirmation
+    /// « Supprimer définitivement 3 manches ? » : correction + suppression en une transaction.
+    @MainActor
+    func testCorrectionEarlyFinishDeletesLaterRoundsAfterSecondConfirmation() throws {
+        let app = XCUIApplication()
+        app.launch(seed: .withHistory)
+        openHistory(app)
+
+        try scrollTo(app.buttons["history.round.1"], in: app).tap()
+        XCTAssertTrue(waitForEntrySheet(app), "Toucher une manche doit ouvrir la feuille de correction.")
+
+        let alert = submitDimitriAtHundred(app)
+        alert.buttons["Supprimer les manches suivantes"].tap()
+
+        // Seconde confirmation explicite : rien n'est encore écrit.
+        let confirm = app.buttons["Supprimer 3 manches"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: timeout), "Une seconde confirmation doit être demandée.")
+        confirm.tap()
+
+        XCTAssertTrue(
+            waitForDisappearance(of: app.buttons["round.save"]),
+            "La feuille doit se fermer après la correction confirmée."
+        )
+        let remaining = app.buttons["history.round.1"]
+        XCTAssertTrue(remaining.waitForExistence(timeout: timeout))
+        XCTAssertTrue(remaining.label.contains("Dimitri 100, total 100"), remaining.label)
+        XCTAssertTrue(remaining.label.contains("Fin de partie à cette manche"), remaining.label)
+        XCTAssertFalse(app.buttons["history.round.2"].exists, "Les manches 2 à 4 doivent être supprimées.")
+        XCTAssertFalse(app.buttons["history.round.4"].exists, "Les manches 2 à 4 doivent être supprimées.")
+    }
+
+    /// Feuille de correction de la manche 1 ouverte : Dimitri 15 → 100, enregistrement, puis
+    /// alerte « La partie aurait dû se terminer » (renvoyée, déjà affichée).
+    @MainActor
+    private func submitDimitriAtHundred(_ app: XCUIApplication) -> XCUIElement {
+        let dimitriField = app.textFields["round.score.3"]
+        XCTAssertTrue(dimitriField.waitForExistence(timeout: timeout), "Champ du score de Dimitri attendu.")
+        replaceText(in: dimitriField, with: "100")
+        let save = app.buttons["round.save"]
+        XCTAssertTrue(save.waitForExistence(timeout: timeout))
+        save.tap()
+
+        let alert = app.alerts["La partie aurait dû se terminer"]
+        XCTAssertTrue(alert.waitForExistence(timeout: timeout), "Une décision explicite doit être demandée.")
+        return alert
+    }
+
     // MARK: Navigation et utilitaires
 
-    /// Accueil → « Reprendre la partie » → tableau → Historique.
+    /// Accueil → « Reprendre la partie » → tableau → lien « Historique (4 manches) ».
     @MainActor
     private func openHistory(_ app: XCUIApplication) {
         let resume = app.buttons["home.resume"]
         XCTAssertTrue(resume.waitForExistence(timeout: 15), "« Reprendre la partie » attendu sur l'accueil.")
         resume.tap()
 
-        let menu = app.buttons["game.menu"]
-        if menu.waitForExistence(timeout: timeout) {
-            menu.tap()
-            let item = app.buttons["game.menu.history"]
-            XCTAssertTrue(item.waitForExistence(timeout: timeout), "Entrée « Historique » attendue dans le menu.")
-            item.tap()
-        } else {
-            let link = app.buttons["game.historyLink"]
-            XCTAssertTrue(link.waitForExistence(timeout: timeout), "Accès à l'historique attendu sur le tableau.")
-            link.tap()
+        XCTAssertTrue(app.buttons["game.addRound"].waitForExistence(timeout: timeout), "Tableau des scores attendu.")
+        let link = app.buttons["game.historyLink"]
+        for _ in 0..<6 where !(link.exists && link.isHittable) {
+            app.swipeUp()
         }
+        XCTAssertTrue(link.waitForExistence(timeout: timeout), "Lien vers l'historique attendu sur le tableau.")
+        XCTAssertTrue(link.label.contains("Historique"), link.label)
+        link.tap()
         XCTAssertTrue(
             app.navigationBars["Historique"].waitForExistence(timeout: timeout),
             "L'écran Historique doit s'afficher."

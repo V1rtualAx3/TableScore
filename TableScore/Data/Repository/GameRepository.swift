@@ -116,6 +116,9 @@ enum GameRepositoryError: Error, Sendable, Hashable {
     /// `finishGame` demandé alors que le moteur considère la partie en cours.
     case gameNotOver(UUID)
     case noRoundToDelete(gameID: UUID)
+    /// Résolution d'une fin anticipée refusée : la partie n'a pas (ou plus) d'incohérence, ou les
+    /// manches confirmées ne sont pas exactement celles calculées par le moteur. Rien n'a été écrit.
+    case staleEarlyEndDecision(gameID: UUID)
     /// Même identifiant (partie ou manche) déjà utilisé pour un contenu différent ou une autre partie.
     case identifierConflict(UUID)
     /// Données persistées illisibles : jamais de crash, jamais de valeur inventée.
@@ -142,7 +145,7 @@ enum GameRepositoryError: Error, Sendable, Hashable {
         case .gameNotFound:
             String(localized: "Cette partie n'existe plus.")
         case .gameNotActive:
-            String(localized: "Cette partie est close : elle ne peut plus être modifiée.")
+            String(localized: "Cette partie est close\u{00A0}: elle ne peut plus être modifiée.")
         case .invalidLifecycleTransition:
             String(localized: "Cette action n'est pas possible pour cette partie.")
         case .anotherGameActive:
@@ -151,6 +154,8 @@ enum GameRepositoryError: Error, Sendable, Hashable {
             String(localized: "La partie n'est pas encore terminée.")
         case .noRoundToDelete:
             String(localized: "Aucune manche à supprimer.")
+        case .staleEarlyEndDecision:
+            String(localized: "Les manches ont changé depuis l'affichage. Rien n'a été supprimé.")
         case .identifierConflict:
             String(localized: "Cette action entre en conflit avec une saisie déjà enregistrée.")
         case .corruptedData:
@@ -270,6 +275,22 @@ protocol GameRepository: AnyObject {
     ) throws(GameRepositoryError) -> RoundReplacementOutcome
 
     func deleteLastRound(ofGame gameID: UUID) throws(GameRepositoryError) -> RoundDeletion
+
+    /// Résout une fin anticipée **déjà enregistrée** (§4.6) : supprime, en une seule transaction,
+    /// exactement les manches jouées après la manche qui termine la partie.
+    ///
+    /// - `confirmedRoundIDs` doit être égal (mêmes identifiants, sans doublon) à
+    ///   `computation.inconsistency.subsequentRoundIDs` relu au moment de l'appel ; sinon
+    ///   `staleEarlyEndDecision` est levée et rien n'est écrit.
+    /// - Partie `active` ou `finished` ; `archived` (lecture seule) ⇒ `gameNotActive`.
+    /// - Statut : inchangé. Une partie `finished` le reste (jamais rouverte, date de fin conservée) ;
+    ///   une partie `active` reste active (sa clôture reste une action explicite, `finishGame`).
+    ///   Après l'opération, le moteur considère toujours la partie terminée, sans incohérence.
+    /// - Échec de sauvegarde ⇒ `storageFailure`, aucune manche supprimée.
+    func deleteRoundsAfterEarlyEnd(
+        gameID: UUID,
+        confirmedRoundIDs: [UUID]
+    ) throws(GameRepositoryError) -> SavedGame
 
     /// Clôt la partie active si le moteur la considère terminée (idempotent si déjà `finished`).
     func finishGame(id: UUID) throws(GameRepositoryError) -> SavedGame

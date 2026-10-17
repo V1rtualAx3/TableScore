@@ -26,7 +26,7 @@ struct GameOverTests {
         #expect(result.lines.map(\.total) == [26, 26, 105])
         #expect(result.lines.map(\.rank) == [1, 1, 3])
         #expect(result.lines.map(\.isWinner) == [true, true, false])
-        #expect(result.headline == "Égalité : Bob et Chloé gagnent ensemble")
+        #expect(result.headline == "Égalité\u{00A0}: Bob et Chloé gagnent ensemble")
         #expect(result.spokenSummary.contains("Bob et Chloé"))
     }
 
@@ -43,10 +43,10 @@ struct GameOverTests {
         let result = try #require(GameOverSummary(game: finished))
         #expect(result.winnerNames == ["Bob"])
         #expect(!result.hasCoWinners)
-        #expect(result.headline == "Bravo Bob !")
+        #expect(result.headline == "Bravo Bob\u{202F}!")
         #expect(result.lines.first?.name == "Bob")
         #expect(result.lines.filter(\.isWinner).count == 1)
-        #expect(result.spokenSummary.hasPrefix("Partie terminée. Vainqueur : Bob, "))
+        #expect(result.spokenSummary.hasPrefix("Partie terminée. Vainqueur\u{00A0}: Bob, "))
         #expect(result.rulesReminder.contains("100"))
     }
 

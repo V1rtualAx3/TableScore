@@ -1,3 +1,4 @@
+import Accessibility
 import SwiftUI
 
 /// Historique et correction (cahier §4.6, docs/ux/lot2-parcours.md §2.5).
@@ -62,25 +63,6 @@ private struct HistoryContent: View {
                 Button("Annuler", role: .cancel) {}
             } message: {
                 Text("Les totaux reviendront à leur état précédent.")
-            }
-            .confirmationDialog(
-                "Rouvrir la partie pour corriger ?",
-                isPresented: reopenBinding,
-                titleVisibility: .visible,
-                presenting: model.pendingReopenRoundID
-            ) { roundID in
-                Button("Rouvrir et corriger") {
-                    let reopenedRoundID = model.confirmReopen(roundID: roundID)
-                    router.notifyDataChanged()
-                    if let reopenedRoundID {
-                        presentEdit(reopenedRoundID)
-                    }
-                }
-                Button("Annuler", role: .cancel) {
-                    model.cancelReopen()
-                }
-            } message: { _ in
-                Text("La partie redeviendra « en cours » le temps de la correction.")
             }
             .confirmationDialog(
                 confirmingNotice?.confirmationTitle ?? "",
@@ -197,20 +179,11 @@ private struct HistoryContent: View {
 
     private var hint: LocalizedStringKey {
         model.lifecycle == .finished
-            ? "Rouvre la partie pour corriger cette manche."
+            ? "Corrige cette manche. La partie reste terminée si le seuil est toujours atteint."
             : "Corrige cette manche."
     }
 
     // MARK: Liaisons
-
-    private var reopenBinding: Binding<Bool> {
-        Binding(
-            get: { model.pendingReopenRoundID != nil },
-            set: { isPresented in
-                if !isPresented { model.cancelReopen() }
-            }
-        )
-    }
 
     private var noticeBinding: Binding<Bool> {
         Binding(
@@ -236,7 +209,7 @@ private struct HistoryContent: View {
         switch model.requestEdit(roundID: roundID) {
         case .present(let id):
             presentEdit(id)
-        case .needsReopen, .unavailable:
+        case .unavailable:
             break
         }
     }

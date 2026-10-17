@@ -62,20 +62,20 @@ struct GameOverSummary: Equatable, Sendable {
     var headline: String {
         let names = joinedWinnerNames
         return hasCoWinners
-            ? String(localized: "Égalité : \(names) gagnent ensemble")
-            : String(localized: "Bravo \(names) !")
+            ? String(localized: "Égalité\u{00A0}: \(names) gagnent ensemble")
+            : String(localized: "Bravo \(names)\u{202F}!")
     }
 
     /// « Vainqueur : Bob, 26 points » / « Égalité : Bob et Chloé, 26 points chacun » (VoiceOver).
     var spokenWinners: String {
         let names = joinedWinnerNames
         guard let total = winnerTotal else {
-            return String(localized: "Vainqueur : \(names)")
+            return String(localized: "Vainqueur\u{00A0}: \(names)")
         }
         let points = ScoreFormat.spoken(total)
         return hasCoWinners
-            ? String(localized: "Égalité : \(names), \(points) points chacun")
-            : String(localized: "Vainqueur : \(names), \(points) points")
+            ? String(localized: "Égalité\u{00A0}: \(names), \(points) points chacun")
+            : String(localized: "Vainqueur\u{00A0}: \(names), \(points) points")
     }
 
     /// « Partie terminée. Vainqueur : Bob, 26 points ».
@@ -88,10 +88,8 @@ struct GameOverSummary: Equatable, Sendable {
         String(localized: "La partie s'arrête dès qu'un joueur atteint \(targetScore) points. Le plus petit total gagne.")
     }
 
+    /// Liste française partagée (`VerdictText.frenchList`).
     static func join(_ names: [String]) -> String {
-        guard let last = names.last else { return "" }
-        guard names.count > 1 else { return last }
-        let head = names.dropLast().joined(separator: ", ")
-        return String(localized: "\(head) et \(last)")
+        VerdictText.frenchList(names)
     }
 }

@@ -156,7 +156,7 @@ struct HistoryRoundCard: View {
                     .font(.footnote)
             }
             Text(verbatim: player.name)
-                .lineLimit(2)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                 .fontWeight(player.isClosing ? .semibold : .regular)
         }
     }

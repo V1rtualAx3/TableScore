@@ -36,7 +36,8 @@ final class HistoryModel {
         let index: Int
         let closerName: String
         let isCloserDoubled: Bool
-        /// Raison du verdict, en minuscules (« égalité avec Chloé », « zéro, jamais doublé »…).
+        /// Raison du verdict, en minuscules (`VerdictText.reason` : « score doublé : égalité avec
+        /// Chloé », « zéro n'est jamais doublé »…).
         let closerNote: String
         let isCorrected: Bool
         /// La partie se termine à cette manche (seuil atteint pour la première fois).
@@ -50,7 +51,7 @@ final class HistoryModel {
         /// Lecture VoiceOver complète de la manche.
         let accessibilityLabel: String
 
-        var displayedCloserNote: String { closerNote.prefix(1).uppercased() + closerNote.dropFirst() }
+        var displayedCloserNote: String { VerdictText.sentenceCase(closerNote) }
     }
 
     /// Suppression annulable : la manche exacte (même identifiant) et l'état attendu pour l'annuler.
@@ -69,9 +70,9 @@ final class HistoryModel {
     struct InconsistencyNotice: Hashable, Sendable {
         let endingRoundIndex: Int
         let subsequentRoundIndices: [Int]
-        /// Identifiants confirmés par l'utilisateur (vérifiés à nouveau avant toute suppression).
+        /// Identifiants confirmés par l'utilisateur (vérifiés à nouveau par le dépôt, dans la même
+        /// transaction que la suppression).
         let subsequentRoundIDs: [UUID]
-        let requiresReopen: Bool
         let title: String
         let message: String
         let actionTitle: String
@@ -82,11 +83,11 @@ final class HistoryModel {
 
     /// Suite à donner au toucher d'une manche.
     enum EditRequest: Hashable, Sendable {
-        /// Présenter le formulaire de correction de cette manche.
+        /// Présenter le formulaire de correction de cette manche (partie active ou terminée :
+        /// aucune écriture ici ; une partie terminée n'est rouverte qu'à l'enregistrement).
         case present(roundID: UUID)
-        /// Partie close : confirmation « Rouvrir la partie pour corriger ? » demandée.
-        case needsReopen
-        /// Lecture seule (partie interrompue, manche inconnue, opération en cours).
+        /// Lecture seule (partie interrompue, manche inconnue, opération en cours, autre partie
+        /// en cours pour une partie terminée — message dans `actionError`).
         case unavailable
     }
 
@@ -102,8 +103,6 @@ final class HistoryModel {
     private(set) var inconsistency: InconsistencyNotice?
     private(set) var undoableDeletion: UndoableDeletion?
     private(set) var isWorking = false
-    /// Manche à corriger en attente de la confirmation de réouverture.
-    private(set) var pendingReopenRoundID: UUID?
     /// Message d'erreur d'une action (alerte) ; remis à `nil` à la fermeture de l'alerte.
     var actionError: String?
 
@@ -130,8 +129,8 @@ final class HistoryModel {
     }
 
     var deletionConfirmationTitle: String {
-        guard let lastRound else { return "Supprimer la dernière manche ?" }
-        return "Supprimer la manche \(lastRound.index) ?"
+        guard let lastRound else { return "Supprimer la dernière manche\u{202F}?" }
+        return "Supprimer la manche \(lastRound.index)\u{202F}?"
     }
 
     var deletionConfirmationButtonTitle: String {
@@ -142,9 +141,9 @@ final class HistoryModel {
     var lifecycleNote: String? {
         switch lifecycle {
         case .finished:
-            "Partie terminée. Touchez une manche pour rouvrir la partie et la corriger."
+            "Partie terminée. Touchez une manche pour la corriger."
         case .archived:
-            "Partie interrompue : historique en lecture seule."
+            "Partie interrompue\u{00A0}: historique en lecture seule."
         case .active, nil:
             nil
         }
@@ -186,7 +185,12 @@ final class HistoryModel {
 
     // MARK: Correction
 
-    /// Toucher une manche. Une partie close demande d'abord une confirmation de réouverture.
+    /// Toucher une manche : présente directement la correction, **sans écriture** ni dialogue,
+    /// y compris pour une partie terminée (la feuille la rouvre seulement au moment d'enregistrer,
+    /// puis rétablit « terminée » si la partie l'est encore ; voir `RoundEntryModel`).
+    ///
+    /// Une partie terminée ne peut pas être corrigée si une autre partie est en cours (une seule
+    /// partie active) : message explicite au lieu d'une feuille vouée à l'échec.
     func requestEdit(roundID: UUID) -> EditRequest {
         guard !isWorking, rows.contains(where: { $0.id == roundID }) else { return .unavailable }
         switch lifecycle {
@@ -194,35 +198,16 @@ final class HistoryModel {
             undoableDeletion = nil
             return .present(roundID: roundID)
         case .finished:
-            pendingReopenRoundID = roundID
-            return .needsReopen
+            // Lecture seule ; en cas d'erreur de lecture, l'enregistrement signalera le problème.
+            if let other = try? repository.activeGame(), other.id != gameID {
+                actionError = CorrectionText.anotherGameActive
+                return .unavailable
+            }
+            undoableDeletion = nil
+            return .present(roundID: roundID)
         case .archived, nil:
             return .unavailable
         }
-    }
-
-    func cancelReopen() {
-        pendingReopenRoundID = nil
-    }
-
-    /// Rouvre la partie (`reopenGame`) puis renvoie la manche à corriger ; `nil` en cas d'échec
-    /// (message dans `actionError`, aucune autre modification).
-    func confirmReopen(roundID: UUID) -> UUID? {
-        pendingReopenRoundID = nil
-        guard !isWorking else { return nil }
-        isWorking = true
-        defer { isWorking = false }
-        do {
-            let reopened = try repository.reopenGame(id: gameID)
-            apply(reopened)
-        } catch {
-            actionError = Self.message(for: GameRepositoryError.from(error, operation: .write))
-            load()
-            return nil
-        }
-        guard rows.contains(where: { $0.id == roundID }) else { return nil }
-        undoableDeletion = nil
-        return roundID
     }
 
     // MARK: Suppression de la dernière manche
@@ -275,53 +260,31 @@ final class HistoryModel {
 
     // MARK: Incohérence §4.6
 
-    /// Supprime les manches jouées après la fin de partie, **une à une** depuis la dernière, sur
-    /// décision explicite (confirmation faite par la vue).
+    /// Supprime les manches jouées après la fin de partie, sur décision explicite (confirmation
+    /// faite par la vue), en **une seule transaction** (`GameRepository.deleteRoundsAfterEarlyEnd`).
     ///
-    /// Garanties : seules les manches confirmées (`notice.subsequentRoundIDs`) peuvent être
-    /// supprimées ; chaque suppression vérifie que la dernière manche fait partie de cet ensemble ;
-    /// si les données ont changé depuis l'affichage, rien n'est supprimé et la décision est
-    /// redemandée. Limite : le dépôt n'offre pas d'opération atomique pour ce cas ; en cas d'échec
-    /// en cours de route, les manches déjà supprimées le restent (ce sont uniquement des manches
-    /// confirmées) et l'erreur est affichée. Une partie close est d'abord rouverte.
+    /// Garanties (vérifiées par le dépôt au moment d'écrire) : seules les manches confirmées
+    /// (`notice.subsequentRoundIDs`) sont supprimées, et seulement si elles correspondent encore
+    /// exactement au calcul du moteur ; sinon rien n'est supprimé et la décision est redemandée.
+    /// En cas d'échec, rien n'est supprimé. Statut inchangé : une partie terminée le reste.
     @discardableResult
     func deleteRoundsAfterEarlyEnd(confirmed notice: InconsistencyNotice) -> Bool {
         guard !isWorking, isEditable else { return false }
         isWorking = true
         defer { isWorking = false }
         undoableDeletion = nil
-        let confirmedIDs = Set(notice.subsequentRoundIDs)
-        var changed = false
         do {
-            var current = try repository.game(id: gameID)
-            guard let live = current.computation.inconsistency,
-                  Set(live.subsequentRoundIDs) == confirmedIDs else {
-                actionError = "Les manches ont changé depuis l'affichage. Rien n'a été supprimé : vérifiez l'historique."
-                apply(current)
-                return false
-            }
-            if current.lifecycle == .finished {
-                current = try repository.reopenGame(id: gameID)
-                changed = true
-            }
-            var remainingDeletions = confirmedIDs.count
-            while current.computation.inconsistency != nil {
-                guard remainingDeletions > 0,
-                      let last = current.rounds.last,
-                      confirmedIDs.contains(last.id) else {
-                    actionError = "La suppression a été interrompue : une manche non confirmée aurait été touchée."
-                    break
-                }
-                current = try repository.deleteLastRound(ofGame: gameID).game
-                remainingDeletions -= 1
-                changed = true
-            }
-            apply(current)
+            let updated = try repository.deleteRoundsAfterEarlyEnd(
+                gameID: gameID,
+                confirmedRoundIDs: notice.subsequentRoundIDs
+            )
+            apply(updated)
+            return true
         } catch {
             actionError = Self.message(for: GameRepositoryError.from(error, operation: .write))
             load()
+            return false
         }
-        return changed
     }
 
     // MARK: Mise en forme (aucun calcul de score)
@@ -360,7 +323,7 @@ final class HistoryModel {
                 )
             }
             let closerName = names[scoring.closingParticipantID] ?? "Joueur"
-            let note = closerNote(for: scoring.verdict, names: names)
+            let note = VerdictText.reason(for: scoring.verdict, nameOf: { names[$0] ?? "Joueur" })
             let isCorrected = game.info(forRound: scoring.roundID)?.wasCorrected ?? false
             let isEnding = endingIndex == scoring.index
             return RoundRow(
@@ -386,34 +349,6 @@ final class HistoryModel {
             )
         }
         return rows.reversed()
-    }
-
-    /// Raison du verdict calculé par le moteur, formulée pour l'affichage (docs/ux §3.2).
-    static func closerNote(for verdict: CloserVerdict, names: [UUID: String]) -> String {
-        func joined(_ ids: [UUID]) -> String { frenchList(ids.map { names[$0] ?? "Joueur" }) }
-        switch verdict {
-        case .doubled(let lower, let tied):
-            // Cas mixte : priorité au plus petit score (formulation, pas une règle).
-            if !lower.isEmpty {
-                return "score doublé : \(joined(lower)) \(lower.count > 1 ? "ont" : "a") fait moins"
-            }
-            return "score doublé : égalité avec \(joined(tied))"
-        case .soleLowest:
-            return "seul plus petit score, pas de pénalité"
-        case .zeroNeverDoubled:
-            return "zéro, jamais doublé"
-        case .negativeNeverDoubled:
-            return "score négatif, jamais doublé"
-        case .penaltyDisabledByHouseRules:
-            return "pénalité désactivée par les règles maison"
-        }
-    }
-
-    /// « Alice », « Alice et Bob », « Alice, Bob et Chloé » (indépendant de la langue de l'appareil).
-    static func frenchList(_ items: [String]) -> String {
-        guard let last = items.last else { return "" }
-        guard items.count > 1 else { return last }
-        return items.dropLast().joined(separator: ", ") + " et " + last
     }
 
     private static func spokenSummary(
@@ -450,54 +385,32 @@ final class HistoryModel {
         let indices = game.computation.rounds
             .filter { ids.contains($0.scoring.roundID) }
             .map(\.scoring.index)
-        guard let first = indices.first, let last = indices.last else { return nil }
 
-        let rangeText: String
-        let roundsText: String
-        switch indices.count {
-        case 1:
-            rangeText = "la manche \(first)"
-            roundsText = "La manche \(first) a été jouée ensuite."
-        case 2:
-            rangeText = "les manches \(first) et \(last)"
-            roundsText = "Les manches \(first) et \(last) ont été jouées ensuite."
-        default:
-            rangeText = "les manches \(first) à \(last)"
-            roundsText = "Les manches \(first) à \(last) ont été jouées ensuite."
-        }
-        let requiresReopen = game.lifecycle == .finished
+        guard !indices.isEmpty else { return nil }
+
         var message = "Le seuil de \(game.rules.targetScore) points a été atteint à la manche "
-            + "\(inconsistency.endingRoundIndex). \(roundsText) Rien n'a été effacé : corrigez une "
-            + "manche ou supprimez les manches jouées après la fin."
+            + "\(inconsistency.endingRoundIndex). \(LaterRoundsText.playedAfterSentence(indices)) "
+            + "Rien n'a été effacé\u{00A0}: corrigez une manche ou supprimez les manches jouées après la fin."
         if game.lifecycle == .archived {
-            message += " Partie interrompue : lecture seule."
-        }
-        let count = indices.count
-        var confirmationMessage = "\(rangeText.prefix(1).uppercased() + rangeText.dropFirst()) "
-            + "\(count > 1 ? "seront effacées" : "sera effacée"). Cette action ne peut pas être annulée."
-        if requiresReopen {
-            confirmationMessage += " La partie sera rouverte."
+            message += " Partie interrompue\u{00A0}: lecture seule."
         }
         return InconsistencyNotice(
             endingRoundIndex: inconsistency.endingRoundIndex,
             subsequentRoundIndices: indices,
             subsequentRoundIDs: inconsistency.subsequentRoundIDs,
-            requiresReopen: requiresReopen,
             title: "La partie aurait dû se terminer",
             message: message,
-            actionTitle: "Supprimer \(rangeText)",
-            confirmationTitle: count > 1
-                ? "Supprimer définitivement \(count) manches ?"
-                : "Supprimer définitivement la manche \(first) ?",
-            confirmationMessage: confirmationMessage,
-            confirmationButtonTitle: count > 1 ? "Supprimer \(count) manches" : "Supprimer la manche \(first)"
+            actionTitle: "Supprimer \(LaterRoundsText.range(indices))",
+            confirmationTitle: LaterRoundsText.deletionTitle(indices),
+            confirmationMessage: LaterRoundsText.deletionMessage(indices),
+            confirmationButtonTitle: LaterRoundsText.deletionButton(indices)
         )
     }
 
     private static func message(for error: GameRepositoryError) -> String {
         switch error {
         case .anotherGameActive:
-            "Une autre partie est en cours. Terminez-la ou abandonnez-la avant de corriger celle-ci."
+            CorrectionText.anotherGameActive
         case .noRoundToDelete:
             "Aucune manche à supprimer."
         default:

@@ -36,6 +36,7 @@ private struct RoundEntryForm: View {
 
     @Environment(AppRouter.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage(AppPreferenceKey.hapticsEnabled) private var hapticsEnabled = true
     @FocusState private var focusedField: UUID?
     @State private var isConfirmingCancel = false
@@ -45,10 +46,11 @@ private struct RoundEntryForm: View {
             .navigationTitle(model.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
-            // Glisser vers le bas ne doit pas perdre une saisie commencée.
-            .interactiveDismissDisabled(model.isDirty || model.isSaving)
+            // Glisser vers le bas ne doit pas perdre une saisie commencée, ni laisser rouverte une
+            // partie terminée (cas d'échec d'écriture, normalement résorbé immédiatement).
+            .interactiveDismissDisabled(model.isDirty || model.isSaving || model.needsLifecycleRestore)
             .confirmationDialog(
-                model.isEditing ? "Abandonner la correction ?" : "Abandonner la saisie ?",
+                model.isEditing ? "Abandonner la correction\u{202F}?" : "Abandonner la saisie\u{202F}?",
                 isPresented: $isConfirmingCancel,
                 titleVisibility: .visible
             ) {
@@ -87,6 +89,24 @@ private struct RoundEntryForm: View {
             } message: { decision in
                 Text(decision.message)
             }
+            // Seconde confirmation de la suppression des manches postérieures (§4.6), comme dans
+            // l'historique ; « Annuler » revient à la saisie sans rien écrire.
+            .confirmationDialog(
+                model.pendingDeletionConfirmation?.finalConfirmationTitle ?? "",
+                isPresented: deletionConfirmationBinding,
+                titleVisibility: .visible,
+                presenting: model.pendingDeletionConfirmation
+            ) { earlyEnd in
+                Button(earlyEnd.finalConfirmationButtonTitle, role: .destructive) {
+                    let model = model
+                    Task { _ = model.confirmLaterRoundsDeletion(earlyEnd) }
+                }
+                Button("Annuler", role: .cancel) {
+                    model.cancelLaterRoundsDeletion()
+                }
+            } message: { earlyEnd in
+                Text(earlyEnd.finalConfirmationMessage)
+            }
             .sensoryFeedback(trigger: model.closerID) { _, newValue in
                 hapticsEnabled && newValue != nil ? .selection : nil
             }
@@ -95,6 +115,13 @@ private struct RoundEntryForm: View {
             }
             .onChange(of: model.isCompleted) { _, isCompleted in
                 if isCompleted { finish() }
+            }
+            .onDisappear {
+                // Toute fermeture (y compris par glissement) : filet de sécurité du statut d'une
+                // partie terminée rouverte pour enregistrer. Aucune écriture dans le cas normal.
+                if model.restoreLifecycleIfNeeded() {
+                    router.notifyDataChanged()
+                }
             }
     }
 
@@ -127,7 +154,7 @@ private struct RoundEntryForm: View {
                 } header: {
                     Text("Points de la manche")
                 } footer: {
-                    Text("Score de chaque joueur, colonnes déjà retirées. « ± » rend un score négatif.")
+                    Text("Score de chaque joueur, colonnes déjà retirées. «\u{00A0}±\u{00A0}» rend un score négatif.")
                 }
 
                 CloserPicker(model: model)
@@ -150,21 +177,7 @@ private struct RoundEntryForm: View {
             }
             // Barre d'action au-dessus du clavier (safe area clavier respectée).
             .primaryActionInset {
-                if let summary = model.blockingSummary {
-                    Label {
-                        Text(summary)
-                    } icon: {
-                        Image(systemName: "info.circle")
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(Color.secondary)
-                    // Hauteur bornée avec le clavier ouvert ; liste complète lue par VoiceOver.
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(model.blockingHint ?? summary)
-                    .accessibilityIdentifier(AccessibilityID.Round.blockingReasons)
-                }
+                actionSummary
                 PrimaryActionButton(LocalizedStringKey(model.saveTitle), isLoading: model.isSaving) {
                     _ = model.save()
                 }
@@ -177,6 +190,46 @@ private struct RoundEntryForm: View {
             // Ajout : le clavier s'ouvre directement sur le premier joueur.
             if !model.isEditing, focusedField == nil {
                 focusedField = model.fields.first?.participantID
+            }
+        }
+    }
+
+    // MARK: Zone d'action
+
+    /// Ligne courte au-dessus du bouton : pénalité du clôturant (saisie complète, visible avant
+    /// d'enregistrer même clavier ouvert) ou ce qui manque encore. Tailles d'accessibilité : une
+    /// seule ligne, et rien tant qu'un champ a le focus (le clavier occupe déjà l'écran ; le
+    /// détail reste dans l'aperçu et dans l'indice VoiceOver du bouton).
+    @ViewBuilder
+    private var actionSummary: some View {
+        let isAccessibilitySize = dynamicTypeSize.isAccessibilitySize
+        if !(isAccessibilitySize && focusedField != nil) {
+            if let line = model.closerPreviewLine, let description = line.closerDescription {
+                Label {
+                    Text(verbatim: description.text)
+                } icon: {
+                    Image(systemName: line.isDoubled ? Theme.Symbol.doubled : Theme.Symbol.closer)
+                        .foregroundStyle(line.isDoubled ? Theme.Palette.doubled : Color.secondary)
+                }
+                .font(.footnote.weight(line.isDoubled ? .semibold : .regular))
+                .lineLimit(isAccessibilitySize ? 1 : 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(description.spoken)
+            } else if let summary = model.blockingSummary {
+                Label {
+                    Text(summary)
+                } icon: {
+                    Image(systemName: "info.circle")
+                }
+                .font(.footnote)
+                .foregroundStyle(Color.secondary)
+                // Hauteur bornée avec le clavier ouvert ; liste complète lue par VoiceOver.
+                .lineLimit(isAccessibilitySize ? 1 : 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(model.blockingHint ?? summary)
+                .accessibilityIdentifier(AccessibilityID.Round.blockingReasons)
             }
         }
     }
@@ -204,6 +257,17 @@ private struct RoundEntryForm: View {
             get: { model.saveErrorMessage != nil },
             set: { isPresented in
                 if !isPresented { model.dismissSaveError() }
+            }
+        )
+    }
+
+    private var deletionConfirmationBinding: Binding<Bool> {
+        let model = model
+        return Binding(
+            get: { model.pendingDeletionConfirmation != nil },
+            set: { isPresented in
+                // Fermeture sans choix : rien n'est écrit, la saisie est conservée.
+                if !isPresented { model.cancelLaterRoundsDeletion() }
             }
         )
     }
@@ -243,6 +307,7 @@ private struct RoundEntryForm: View {
         if model.isEditing && hapticsEnabled {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         }
+        _ = model.prepareForDismissal()
         router.notifyDataChanged()
         router.dismissSheet()
     }

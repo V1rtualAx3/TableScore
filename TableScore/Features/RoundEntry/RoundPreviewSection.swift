@@ -24,12 +24,12 @@ struct RoundPreviewSection: View {
         var notes: [String] = []
         if let endingIndex = preview.earlyEndRoundIndex {
             notes.append(
-                "Cette correction termine la partie à la manche \(endingIndex) : "
+                "Cette correction termine la partie à la manche \(endingIndex)\u{00A0}: "
                     + "une confirmation sera demandée."
             )
         } else if preview.endsGameAtThisRound {
             notes.append(
-                "Cette manche termine la partie : un total atteint \(preview.targetScore) points. "
+                "Cette manche termine la partie\u{00A0}: un total atteint \(preview.targetScore) points. "
                     + "Le plus petit total gagne."
             )
         }
@@ -43,12 +43,14 @@ struct RoundPreviewSection: View {
 private struct RoundPreviewRow: View {
     let line: RoundEntryModel.PreviewLine
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.s) {
                 Text(line.name)
                     .font(.headline)
-                    .lineLimit(2)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                 if line.isCloser {
                     Image(systemName: Theme.Symbol.closer)
                         .foregroundStyle(Color.secondary)
