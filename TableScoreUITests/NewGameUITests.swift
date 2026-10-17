@@ -18,16 +18,6 @@ final class NewGameUITests: XCTestCase {
         )
     }
 
-    /// Fait défiler le formulaire jusqu'à ce que l'élément soit atteignable (liste paresseuse).
-    @MainActor
-    private func scrollIntoView(_ element: XCUIElement, in app: XCUIApplication) {
-        var attempts = 0
-        while !(element.exists && element.isHittable), attempts < 6 {
-            app.swipeUp()
-            attempts += 1
-        }
-    }
-
     @MainActor
     func testCreateGameTwoPlayers() throws {
         let app = XCUIApplication()
@@ -59,16 +49,22 @@ final class NewGameUITests: XCTestCase {
         let app = XCUIApplication()
         openNewGameSheet(app)
 
+        // Le bouton finit sous la zone « Commencer » et le clavier (le nouveau champ prend le
+        // focus) : touchers dans la zone réellement visible, et chaque ajout est vérifié.
+        let form = FormDriver(app: app, actionButton: app.buttons["setup.start"])
         let addPlayer = app.buttons["setup.addPlayer"]
-        for _ in 3...8 {
-            scrollIntoView(addPlayer, in: app)
-            XCTAssertTrue(addPlayer.isEnabled)
+        for number in 3...8 {
+            form.bringIntoView(addPlayer)
+            XCTAssertTrue(addPlayer.isEnabled, "L'ajout est possible à \(number - 1) joueurs.")
             addPlayer.tap()
+            XCTAssertTrue(
+                app.textFields["setup.player.\(number)"].waitForExistence(timeout: 5),
+                "Le joueur \(number) doit avoir été ajouté."
+            )
         }
-        scrollIntoView(addPlayer, in: app)
-        XCTAssertTrue(addPlayer.exists)
+        form.bringIntoView(addPlayer)
         XCTAssertFalse(addPlayer.isEnabled, "L'ajout est désactivé à 8 joueurs.")
-        XCTAssertTrue(app.textFields["setup.player.8"].exists || app.textFields["setup.player.8"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.textFields["setup.player.9"].exists)
+        form.bringIntoView(app.textFields["setup.player.8"])
     }
 }

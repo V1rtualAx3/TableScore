@@ -33,7 +33,7 @@ final class HistoryUITests: XCTestCase {
 
         let chloeField = app.textFields["round.score.2"]
         XCTAssertTrue(chloeField.waitForExistence(timeout: timeout), "Champ du score de Chloé attendu.")
-        replaceText(in: chloeField, with: "11")
+        replaceText(in: chloeField, with: "11", app: app)
         let save = app.buttons["round.save"]
         XCTAssertTrue(save.waitForExistence(timeout: timeout))
         save.tap()
@@ -155,7 +155,7 @@ final class HistoryUITests: XCTestCase {
     private func submitDimitriAtHundred(_ app: XCUIApplication) -> XCUIElement {
         let dimitriField = app.textFields["round.score.3"]
         XCTAssertTrue(dimitriField.waitForExistence(timeout: timeout), "Champ du score de Dimitri attendu.")
-        replaceText(in: dimitriField, with: "100")
+        replaceText(in: dimitriField, with: "100", app: app)
         let save = app.buttons["round.save"]
         XCTAssertTrue(save.waitForExistence(timeout: timeout))
         save.tap()
@@ -222,12 +222,17 @@ final class HistoryUITests: XCTestCase {
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 
-    /// Remplace le contenu d'un champ (curseur placé en fin de champ, puis effacement).
+    /// Remplace le score d'un champ de la feuille de correction : focus clavier **vérifié**,
+    /// effacement contrôlé (valeur d'accessibilité « vide »), puis saisie (`FormDriver`).
     @MainActor
-    private func replaceText(in field: XCUIElement, with text: String) {
-        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
-        let current = (field.value as? String) ?? ""
-        let deletions = String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count + 2)
-        field.typeText(deletions + text)
+    private func replaceText(
+        in field: XCUIElement,
+        with text: String,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        FormDriver(app: app, actionButton: app.buttons["round.save"])
+            .replaceText(in: field, with: text, emptyValue: "vide", file: file, line: line)
     }
 }

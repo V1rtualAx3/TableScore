@@ -118,9 +118,16 @@ final class RoundEntryUITests: XCTestCase {
 }
 
 /// Actions communes de la feuille de saisie (identifiants `AccessibilityID.Round.*` en littéral).
+///
+/// Touchers et défilement via `FormDriver` : la zone d'action fixe (résumé + « Enregistrer ») et
+/// le clavier recouvrent le bas du formulaire, et `isHittable` ne le détecte pas.
 @MainActor
 private struct RoundEntryRobot {
     let app: XCUIApplication
+
+    private var form: FormDriver {
+        FormDriver(app: app, actionButton: app.buttons["round.save"])
+    }
 
     func openRoundEntry(seed: SeedScenario, expectedTitle: String) {
         app.launch(seed: seed)
@@ -138,36 +145,23 @@ private struct RoundEntryRobot {
         app.descendants(matching: .any)[identifier].firstMatch
     }
 
-    func typeScore(_ text: String, position: Int) {
+    /// Saisie dans le champ du joueur `position`, après obtention vérifiée du focus clavier.
+    func typeScore(_ text: String, position: Int, file: StaticString = #filePath, line: UInt = #line) {
         let field = app.textFields["round.score.\(position)"]
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
-        tapRevealing(field)
-        field.typeText(text)
+        form.type(text, into: field, file: file, line: line)
     }
 
-    /// Rend l'élément touchable (clavier fermé si besoin, défilement) puis le touche.
-    func tapRevealing(_ target: XCUIElement) {
-        reveal(target)
+    /// Rend l'élément touchable (clavier fermé, défilement) puis le touche.
+    func tapRevealing(_ target: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        reveal(target, file: file, line: line)
         target.tap()
     }
 
-    /// Ferme le clavier (sauf pour un champ de saisie) puis fait défiler vers le bas, puis vers
-    /// le haut, jusqu'à ce que l'élément soit touchable.
-    func reveal(_ target: XCUIElement) {
-        if target.elementType != .textField {
-            dismissKeyboard()
-        }
-        var attempts = 0
-        while !isHittable(target) && attempts < 4 {
-            app.swipeUp()
-            attempts += 1
-        }
-        attempts = 0
-        while !isHittable(target) && attempts < 6 {
-            app.swipeDown()
-            attempts += 1
-        }
-        XCTAssertTrue(target.exists, "Élément introuvable : \(target)")
+    /// Ferme le clavier puis fait défiler jusqu'à ce que l'élément (éventuellement pas encore créé
+    /// par la liste paresseuse, comme les lignes d'aperçu) soit entièrement visible et touchable.
+    func reveal(_ target: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        form.dismissKeyboard()
+        form.bringIntoView(target, file: file, line: line)
     }
 
     func waitForDisappearance(of target: XCUIElement, timeout: TimeInterval = 5) -> Bool {
@@ -176,19 +170,5 @@ private struct RoundEntryRobot {
             object: target
         )
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
-    }
-
-    private func isHittable(_ target: XCUIElement) -> Bool {
-        target.exists && target.isHittable
-    }
-
-    /// Bouton « OK » de la barre du clavier. Sans lui, le défilement suffit : la zone de défilement
-    /// tient compte du clavier.
-    private func dismissKeyboard() {
-        guard app.keyboards.firstMatch.exists else { return }
-        let done = app.toolbars.buttons["OK"]
-        if done.exists && done.isHittable {
-            done.tap()
-        }
     }
 }
