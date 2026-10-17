@@ -232,7 +232,11 @@ final class HistoryUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        FormDriver(app: app, actionButton: app.buttons["round.save"])
-            .replaceText(in: field, with: text, emptyValue: "vide", file: file, line: line)
+        FormDriver(
+            app: app,
+            actionButton: app.buttons["round.save"],
+            keyboardDoneButton: app.buttons["round.keyboardDone"]
+        )
+        .replaceText(in: field, with: text, emptyValue: "vide", file: file, line: line)
     }
 }

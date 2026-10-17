@@ -54,6 +54,9 @@ enum AccessibilityID {
         static func preview(position: Int) -> String { "round.preview.\(position)" }
         static let cancel = "round.cancel"
         static let blockingReasons = "round.blockingReasons"
+        /// Barre du clavier : « Suivant » et « OK » (fermeture du clavier).
+        static let keyboardNext = "round.keyboardNext"
+        static let keyboardDone = "round.keyboardDone"
     }
 
     enum GameOver {

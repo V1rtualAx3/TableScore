@@ -47,6 +47,8 @@ struct FormDriver {
     /// Hauteur réservée au-dessus du bouton : résumé (≤ 3 lignes), espacement et marge intérieure
     /// de la zone d'action.
     var reservedAboveAction: CGFloat = 96
+    /// Bouton « OK » de la barre du clavier (identifiant dédié, ex. `round.keyboardDone`).
+    var keyboardDoneButton: XCUIElement?
 
     private static let margin: CGFloat = 8
     /// Abscisse des glissements : marge du formulaire groupé, hors de toute cellule.
@@ -96,6 +98,7 @@ struct FormDriver {
     @discardableResult
     func bringIntoView(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) -> Bool {
         var stepsDownWhileMissing = 0
+        var previousFrame: CGRect?
         for _ in 0..<16 {
             if isInUsableBand(element) { return true }
             let band = usableBand()
@@ -103,6 +106,14 @@ struct FormDriver {
             let frame = element.exists ? element.frame : .zero
             let delta: CGFloat
             if !frame.isEmpty {
+                if let previousFrame, previousFrame == frame {
+                    // Le glissement précédent n'a rien déplacé : plus de défilement possible dans ce
+                    // sens. Accepté seulement si le point touché (centre) est dans la zone utile ;
+                    // sinon échec immédiat plutôt que des glissements inutiles.
+                    if band.contains(frame.midY) { return true }
+                    break
+                }
+                previousFrame = frame
                 if frame.height >= height {
                     delta = frame.midY - (band.lowerBound + band.upperBound) / 2
                 } else if frame.maxY > band.upperBound {
@@ -120,7 +131,14 @@ struct FormDriver {
             scrollContent(by: delta, within: band)
         }
         let found = isInUsableBand(element)
-        XCTAssertTrue(found, "Élément hors de la zone touchable après défilement : \(element)", file: file, line: line)
+        let frame = element.exists ? element.frame : .zero
+        XCTAssertTrue(
+            found,
+            "Élément hors de la zone touchable après défilement : \(element) ; cadre \(frame), "
+                + "zone utile \(usableBand()), clavier affiché : \(app.keyboards.firstMatch.exists)",
+            file: file,
+            line: line
+        )
         return found
     }
 
@@ -184,7 +202,7 @@ struct FormDriver {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        dismissKeyboard()
+        dismissKeyboard(file: file, line: line)
         bringIntoView(field, file: file, line: line)
         let rightEdge = field.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
         let points = [
@@ -202,13 +220,27 @@ struct FormDriver {
         type(text, into: field, file: file, line: line)
     }
 
-    /// Ferme le clavier par le bouton « OK » de sa barre d'outils, s'il est affiché.
-    func dismissKeyboard() {
-        let done = app.toolbars.buttons["OK"]
-        guard done.exists, done.isHittable else { return }
-        done.tap()
-        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: done)
+    /// Ferme le clavier et **vérifie** qu'il est fermé : bouton « OK » de sa barre (identifiant
+    /// dédié, sinon libellé dans une barre d'outils), à défaut fermeture interactive par
+    /// glissement vers le clavier (`.scrollDismissesKeyboard(.interactively)`). Sans fermeture
+    /// effective, la zone utile reste réduite au-dessus du clavier.
+    func dismissKeyboard(file: StaticString = #filePath, line: UInt = #line) {
+        let keyboard = app.keyboards.firstMatch
+        let candidates = [keyboardDoneButton, app.toolbars.buttons["OK"]].compactMap { $0 }
+        if let done = candidates.first(where: { $0.exists && $0.isHittable }) {
+            done.tap()
+        } else if keyboard.exists {
+            let band = usableBand()
+            let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            let start = origin.withOffset(CGVector(dx: Self.dragX, dy: band.upperBound - 4))
+            let end = origin.withOffset(CGVector(dx: Self.dragX, dy: keyboard.frame.midY))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.1)
+        } else {
+            return
+        }
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: keyboard)
         _ = XCTWaiter().wait(for: [gone], timeout: 3)
+        XCTAssertFalse(keyboard.exists, "Le clavier doit être fermé avant de toucher hors des champs.", file: file, line: line)
     }
 
     private func value(of field: XCUIElement) -> String {

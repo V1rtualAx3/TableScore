@@ -126,7 +126,11 @@ private struct RoundEntryRobot {
     let app: XCUIApplication
 
     private var form: FormDriver {
-        FormDriver(app: app, actionButton: app.buttons["round.save"])
+        FormDriver(
+            app: app,
+            actionButton: app.buttons["round.save"],
+            keyboardDoneButton: app.buttons["round.keyboardDone"]
+        )
     }
 
     func openRoundEntry(seed: SeedScenario, expectedTitle: String) {
@@ -160,7 +164,7 @@ private struct RoundEntryRobot {
     /// Ferme le clavier puis fait défiler jusqu'à ce que l'élément (éventuellement pas encore créé
     /// par la liste paresseuse, comme les lignes d'aperçu) soit entièrement visible et touchable.
     func reveal(_ target: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
-        form.dismissKeyboard()
+        form.dismissKeyboard(file: file, line: line)
         form.bringIntoView(target, file: file, line: line)
     }
 

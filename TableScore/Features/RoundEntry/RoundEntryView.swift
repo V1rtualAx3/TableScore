@@ -201,10 +201,12 @@ private struct RoundEntryForm: View {
             Button("Suivant") {
                 focusNextField(proxy: proxy)
             }
+            .accessibilityIdentifier(AccessibilityID.Round.keyboardNext)
             Spacer()
             Button("OK") {
                 focusedField = nil
             }
+            .accessibilityIdentifier(AccessibilityID.Round.keyboardDone)
         }
     }
 
