@@ -91,7 +91,7 @@ struct ScoreEntryRow: View {
                 .font(Theme.Typography.entryScore)
                 .padding(.horizontal, Theme.Spacing.s)
                 .frame(minWidth: fieldMinWidth, maxWidth: fieldMinWidth * 1.6, minHeight: Theme.Size.minTapTarget)
-                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: Theme.Spacing.s))
+                .background { fieldBackground }
                 .focused(focus, equals: field.participantID)
                 .accessibilityLabel(Text(verbatim: "Score \(VerdictText.ofName(field.name))"))
                 .accessibilityValue(field.spokenValue)
@@ -99,6 +99,24 @@ struct ScoreEntryRow: View {
                 .accessibilityIdentifier(AccessibilityID.Round.score(position: field.position))
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// Cadre visible du champ (44 pt de haut au minimum). Le champ texte lui-même est plus petit
+    /// (marges horizontales, hauteur d'une ligne) : sans ce geste, toucher le bord du cadre ne
+    /// donnait pas le focus (cible réelle < 44 pt). Le fond est **derrière** le champ : un toucher
+    /// sur le texte reste géré par le champ (placement du curseur). Masqué pour VoiceOver, qui
+    /// active le champ lui-même.
+    private var fieldBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Spacing.s)
+        let participantID = field.participantID
+        let focus = focus
+        return shape
+            .fill(Color(.tertiarySystemFill))
+            .contentShape(shape)
+            .onTapGesture {
+                focus.wrappedValue = participantID
+            }
+            .accessibilityHidden(true)
     }
 
     /// « Rendre négatif le score d'Alice » / « Rendre positif le score de Bob ».

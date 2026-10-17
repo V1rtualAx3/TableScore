@@ -320,6 +320,20 @@ struct HistoryModelTests {
         #expect(!model.deleteLastRound())
     }
 
+    @Test("Modèle réutilisé seulement pour la même partie")
+    func resolveKeepsModelOnlyForSameGame() throws {
+        let repository = try seededRepository()
+        let gameID = UITestSeed.withHistory.activeGameID
+        let model = historyModel(repository, gameID)
+        #expect(HistoryModel.resolve(model, gameID: gameID, repository: repository) === model)
+
+        let otherID = Self.fixedID(0xC0)
+        let other = HistoryModel.resolve(model, gameID: otherID, repository: repository)
+        #expect(other !== model)
+        #expect(other.gameID == otherID)
+        #expect(HistoryModel.resolve(nil, gameID: gameID, repository: repository).gameID == gameID)
+    }
+
     @Test("Partie introuvable : message lisible, aucune ligne")
     func unknownGame() {
         let model = historyModel(InMemoryGameRepository(), Self.fixedID(0xFF))

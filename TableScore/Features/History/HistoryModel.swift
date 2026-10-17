@@ -111,6 +111,13 @@ final class HistoryModel {
         self.repository = repository
     }
 
+    /// Modèle à afficher pour `gameID` : `existing` seulement s'il concerne la même partie
+    /// (l'écran peut être réutilisé par la navigation pour une autre partie).
+    static func resolve(_ existing: HistoryModel?, gameID: UUID, repository: any GameRepository) -> HistoryModel {
+        if let existing, existing.gameID == gameID { return existing }
+        return HistoryModel(gameID: gameID, repository: repository)
+    }
+
     // MARK: Dérivés
 
     var lastRound: RoundRow? { rows.first(where: \.isLast) }

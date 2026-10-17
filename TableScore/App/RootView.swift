@@ -22,10 +22,15 @@ struct RootView: View {
     @ViewBuilder
     private func destination(for route: Route) -> some View {
         switch route {
+        // `.id` : une autre partie à la même position du chemin (« Rejouer » remplace
+        // `[.game(ancienne)]` par `[.game(nouvelle)]`) donne un **nouvel** écran, sans l'état
+        // (`@State` du modèle) de l'ancienne partie.
         case .game(let gameID):
             GameView(gameID: gameID)
+                .id(gameID)
         case .history(let gameID):
             HistoryView(gameID: gameID)
+                .id(gameID)
         case .finishedGames:
             FinishedGamesView()
         case .rules:

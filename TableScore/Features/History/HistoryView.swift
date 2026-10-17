@@ -4,7 +4,7 @@ import SwiftUI
 /// Historique et correction (cahier §4.6, docs/ux/lot2-parcours.md §2.5).
 ///
 /// Contrat : destination de `Route.history(gameID)` ; rechargement sur
-/// `.task(id: router.dataRevision)` ; corriger une manche =
+/// `.task(id: router.reloadKey(for: gameID))` ; corriger une manche =
 /// `router.present(.roundEntry(gameID:mode: .edit(roundID:)))` (formulaire et résolution d'une
 /// fin anticipée lors d'une correction : `RoundEntryView`). Pas de CTA proéminent : l'action
 /// principale est de toucher une manche.
@@ -25,9 +25,9 @@ struct HistoryView: View {
         }
         .navigationTitle("Historique")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: router.dataRevision) {
-            let current = model ?? HistoryModel(gameID: gameID, repository: dependencies.repository)
-            if model == nil {
+        .task(id: router.reloadKey(for: gameID)) {
+            let current = HistoryModel.resolve(model, gameID: gameID, repository: dependencies.repository)
+            if model !== current {
                 model = current
             }
             current.load()

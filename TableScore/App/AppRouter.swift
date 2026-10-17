@@ -75,4 +75,18 @@ final class AppRouter {
     func notifyDataChanged() {
         dataRevision &+= 1
     }
+
+    /// Clé de rechargement d'un écran affichant la partie `gameID` : change avec la partie
+    /// **et** avec `dataRevision` (`.task(id: router.reloadKey(for: gameID))`).
+    func reloadKey(for gameID: UUID) -> DataReloadKey {
+        DataReloadKey(gameID: gameID, revision: dataRevision)
+    }
+}
+
+/// Déclencheur de rechargement : partie affichée + révision des données. Inclure la partie évite
+/// qu'un écran réutilisé par la navigation pour une autre partie (« Rejouer » remplace
+/// `[.game(ancienne)]` par `[.game(nouvelle)]` à la même position) garde l'ancienne.
+struct DataReloadKey: Hashable, Sendable {
+    let gameID: UUID
+    let revision: Int
 }

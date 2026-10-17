@@ -57,6 +57,15 @@ final class GameModel {
         self.repository = repository
     }
 
+    /// Modèle à afficher pour `gameID` : `existing` seulement s'il concerne la même partie.
+    /// La navigation peut réutiliser l'écran (et son `@State`) pour une autre partie : « Rejouer »
+    /// remplace `[.game(ancienne)]` par `[.game(nouvelle)]` à la même position. Recharger
+    /// l'ancien modèle afficherait encore la partie terminée au lieu de la nouvelle.
+    static func resolve(_ existing: GameModel?, gameID: UUID, repository: any GameRepository) -> GameModel {
+        if let existing, existing.gameID == gameID { return existing }
+        return GameModel(gameID: gameID, repository: repository)
+    }
+
     // MARK: Chargement
 
     /// Recharge la partie ; détecte une nouvelle dernière manche pour la bannière.

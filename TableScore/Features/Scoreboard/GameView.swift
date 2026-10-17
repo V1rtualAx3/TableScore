@@ -4,7 +4,8 @@ import SwiftUI
 /// Tableau des scores de la partie (docs/ux/lot2-parcours.md §2.3). Destination de `Route.game`.
 ///
 /// Aucune règle de score ici : tout provient de `GameComputation` via `GameModel`.
-/// Rechargement sur `.task(id: router.dataRevision)`.
+/// Rechargement sur `.task(id: router.reloadKey(for: gameID))` : nouvelle révision des données
+/// **ou** autre partie (le modèle n'est réutilisé que pour la même partie, cf. `GameModel.resolve`).
 struct GameView: View {
     let gameID: UUID
 
@@ -20,9 +21,9 @@ struct GameView: View {
                 ProgressView()
             }
         }
-        .task(id: router.dataRevision) {
-            let current = model ?? GameModel(gameID: gameID, repository: dependencies.repository)
-            if model == nil { model = current }
+        .task(id: router.reloadKey(for: gameID)) {
+            let current = GameModel.resolve(model, gameID: gameID, repository: dependencies.repository)
+            if model !== current { model = current }
             current.load()
         }
     }

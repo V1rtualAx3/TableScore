@@ -193,6 +193,44 @@ struct GameModelTests {
         #expect(created.lifecycle == .active)
     }
 
+    @Test("Rejouer : l'écran réutilisé pour la nouvelle partie n'affiche plus l'ancienne")
+    func resolveAfterReplayShowsNewGame() throws {
+        let (finished, repository) = try makeModel(.tieEnd)
+        #expect(finished.showsFinalResults)
+        #expect(!finished.canAddRound)
+        let newID = try #require(finished.replay())
+
+        // Même partie : le modèle (bannière, annonce de fin) est conservé.
+        #expect(GameModel.resolve(finished, gameID: finished.gameID, repository: repository) === finished)
+
+        // Autre partie à la même position de navigation : nouveau modèle, nouvelle partie.
+        let replayed = GameModel.resolve(finished, gameID: newID, repository: repository)
+        #expect(replayed !== finished)
+        #expect(replayed.gameID == newID)
+        replayed.load()
+        #expect(replayed.loadState == .loaded)
+        #expect(replayed.canAddRound)
+        #expect(!replayed.showsFinalResults)
+        #expect(replayed.headerTitle == "Manche 1")
+        #expect(replayed.roundCount == 0)
+
+        // Sans modèle existant : création.
+        #expect(GameModel.resolve(nil, gameID: newID, repository: repository).gameID == newID)
+    }
+
+    @Test("Clé de rechargement : change avec la partie et avec la révision des données")
+    func reloadKeyTracksGameAndRevision() {
+        let router = AppRouter()
+        let first = UUID()
+        let second = UUID()
+        let initial = router.reloadKey(for: first)
+        #expect(router.reloadKey(for: first) == initial)
+        #expect(router.reloadKey(for: second) != initial)
+        router.notifyDataChanged()
+        #expect(router.reloadKey(for: first) != initial)
+        #expect(router.reloadKey(for: first).gameID == first)
+    }
+
     @Test("Abandonner archive la partie sans la supprimer")
     func abandon() throws {
         let (model, repository) = try makeModel(.nearEnd)
