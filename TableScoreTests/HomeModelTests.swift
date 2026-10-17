@@ -42,6 +42,8 @@ struct HomeModelTests {
         (0..<count).map { Participant(id: UUID(), displayName: "Joueur \($0 + 1)", displayOrder: $0) }
     }
 
+    // Tests sur `InMemoryGameRepository` / `UITestSeed` (Debug uniquement).
+    #if DEBUG
     @Test("Aucune partie : état vide, pas de confirmation")
     func noGame() {
         let model = HomeModel(repository: InMemoryGameRepository())
@@ -67,7 +69,6 @@ struct HomeModelTests {
         #expect(model.needsReplacementConfirmation)
     }
 
-    #if DEBUG
     @Test("Partie active avec manches : nombre de manches du dépôt")
     func activeGameWithRounds() throws {
         let repository = InMemoryGameRepository()
@@ -105,7 +106,6 @@ struct HomeModelTests {
         #expect(archived.lifecycle == .archived)
         #expect(model.state == .empty)
     }
-    #endif
 
     @Test("Rechargement après écriture : l'état suit le dépôt")
     func reloadFollowsRepository() throws {
@@ -122,6 +122,7 @@ struct HomeModelTests {
         model.load()
         #expect(model.state == .empty)
     }
+    #endif
 
     @Test("Erreur de lecture : message utilisateur générique, jamais d'état vide trompeur")
     func readFailure() {

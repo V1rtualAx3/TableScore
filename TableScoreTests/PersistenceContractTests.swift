@@ -66,7 +66,10 @@ final class TestClock {
 /// Les deux implémentations doivent respecter exactement le même contrat.
 enum RepositoryKind: String, CaseIterable, Sendable, CustomStringConvertible {
     case swiftData
+    #if DEBUG
+    /// `InMemoryGameRepository` n'existe qu'en Debug.
     case inMemory
+    #endif
 
     var description: String { rawValue }
 
@@ -76,8 +79,10 @@ enum RepositoryKind: String, CaseIterable, Sendable, CustomStringConvertible {
         case .swiftData:
             let container = try PersistenceController.makeContainer(storage: .inMemory)
             return SwiftDataGameRepository(container: container, now: { clock.next() })
+        #if DEBUG
         case .inMemory:
             return InMemoryGameRepository(now: { clock.next() })
+        #endif
         }
     }
 }

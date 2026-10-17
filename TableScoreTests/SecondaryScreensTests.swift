@@ -1,3 +1,5 @@
+// Suites fondées sur `InMemoryGameRepository` (Debug uniquement ; sentinelle dans TableScoreTests.swift).
+#if DEBUG
 import Foundation
 import SwiftData
 import Testing
@@ -213,3 +215,4 @@ struct SecondaryScreensTests {
         #expect(SettingsModel.versionText(shortVersion: "  ", build: "7") == "Inconnue")
     }
 }
+#endif

@@ -1,3 +1,5 @@
+// Suites fondées sur `InMemoryGameRepository` (Debug uniquement ; sentinelle dans TableScoreTests.swift).
+#if DEBUG
 import Foundation
 import Testing
 import TableScoreKit
@@ -239,3 +241,4 @@ struct NewGameModelTests {
         #expect(model.players.count == 2, "Deux joueurs minimum.")
     }
 }
+#endif
