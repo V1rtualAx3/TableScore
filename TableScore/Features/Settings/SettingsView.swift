@@ -7,8 +7,14 @@ struct SettingsView: View {
     @Environment(AppRouter.self) private var router
     @AppStorage(AppPreferenceKey.hapticsEnabled) private var hapticsEnabled = true
     @State private var model: SettingsModel?
-    /// Présentation de l'alerte finale, découplée du modèle : elle n'apparaît qu'après la fermeture
-    /// de la boîte de dialogue (deux présentations simultanées sont ignorées par SwiftUI).
+    /// Présentations découplées du modèle. Les setters de ces liaisons ne font que masquer :
+    /// l'étape du modèle n'est modifiée que par les boutons (« Continuer », « Tout supprimer »,
+    /// « Annuler »), quel que soit l'ordre setter / action choisi par SwiftUI. Une fermeture sans
+    /// bouton laisse une étape inerte : rien n'est supprimé sans les deux boutons explicites, et
+    /// `beginDeletion()` repart de zéro.
+    @State private var isFirstConfirmationPresented = false
+    /// L'alerte finale n'apparaît qu'après la fermeture de la boîte de dialogue (deux
+    /// présentations simultanées sont ignorées par SwiftUI).
     @State private var isLastConfirmationPresented = false
 
     var body: some View {
@@ -41,19 +47,13 @@ struct SettingsView: View {
             Section {
                 Button("Supprimer toutes les données", role: .destructive) {
                     model.beginDeletion()
+                    isFirstConfirmationPresented = true
                 }
                 .accessibilityIdentifier(AccessibilityID.Settings.deleteAllData)
                 .frame(minHeight: Theme.Size.minTapTarget, alignment: .leading)
                 .confirmationDialog(
                     "Supprimer toutes les données\u{202F}?",
-                    isPresented: Binding(
-                        get: { model.deletionStep == .first },
-                        set: { isPresented in
-                            // Fermeture sans choix (toucher à côté) : annulation. Si un bouton a déjà
-                            // fait avancer l'étape, rien à faire.
-                            if !isPresented && model.deletionStep == .first { model.cancelDeletion() }
-                        }
-                    ),
+                    isPresented: $isFirstConfirmationPresented,
                     titleVisibility: .visible
                 ) {
                     Button("Continuer", role: .destructive) { model.continueDeletion() }
@@ -105,13 +105,7 @@ struct SettingsView: View {
         }
         .alert(
             "Dernière confirmation",
-            isPresented: Binding(
-                get: { isLastConfirmationPresented },
-                set: { isPresented in
-                    isLastConfirmationPresented = isPresented
-                    if !isPresented && model.deletionStep == .lastConfirmation { model.cancelDeletion() }
-                }
-            )
+            isPresented: $isLastConfirmationPresented
         ) {
             Button("Tout supprimer", role: .destructive) {
                 if model.confirmDeleteAll() {
@@ -124,7 +118,10 @@ struct SettingsView: View {
         }
         .alert(
             "Suppression impossible",
-            isPresented: Binding(get: { model.hasError }, set: { model.hasError = $0 })
+            isPresented: Binding<Bool>(
+                get: { model.hasError },
+                set: { (isPresented: Bool) in model.hasError = isPresented }
+            )
         ) {
             Button("OK", role: .cancel) {}
         } message: {

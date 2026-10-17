@@ -345,12 +345,18 @@ final class RoundEntryModel {
     // MARK: Enregistrement
 
     /// Enregistre la manche (ajout) ou la correction. Synchrone : le dépôt est local et atomique.
+    ///
+    /// Une décision encore en attente (alerte ou seconde confirmation non affichée, ou fermée sans
+    /// passer par ses boutons) ne bloque jamais l'enregistrement : elle est abandonnée et, si elle
+    /// est toujours nécessaire, redemandée par ce nouvel appel (rien n'a été écrit entre-temps).
     @discardableResult
     func save() -> SaveOutcome {
-        guard !isSaving, !isCompleted, pendingDecision == nil, pendingDeletionConfirmation == nil, canSave,
+        guard !isSaving, !isCompleted, canSave,
               let game, let draft,
               let input = try? draft.makeRoundInput()
         else { return .ignored }
+        pendingDecision = nil
+        pendingDeletionConfirmation = nil
         isSaving = true
         defer { isSaving = false }
         saveErrorMessage = nil
