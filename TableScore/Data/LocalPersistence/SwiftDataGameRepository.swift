@@ -298,14 +298,15 @@ final class SwiftDataGameRepository: GameRepository {
     }
 
     func deleteAllGames() throws(GameRepositoryError) {
-        // Store indisponible après un effacement interrompu : les parties sont déjà supprimées,
-        // seul l'effacement physique et la recréation sont repris.
-        if isStoreAvailable {
+        guard let fileStore else {
             try deleteAllRecords()
+            return
         }
-        guard let fileStore else { return }
         try eraseAndRecreateStore(fileStore)
     }
+
+    /// Conteneur courant (tests : vérification de la libération de l'ancien conteneur).
+    var currentContainer: ModelContainer { container }
 
     /// Suppression logique en une seule transaction (tout ou rien).
     private func deleteAllRecords() throws(GameRepositoryError) {
@@ -323,44 +324,70 @@ final class SwiftDataGameRepository: GameRepository {
         try commit()
     }
 
-    /// Effacement physique après la suppression logique : SQLite ne remet pas à zéro les pages
-    /// libérées (et `PRAGMA secure_delete` n'est pas accessible via SwiftData) ; les prénoms
-    /// pourraient donc subsister dans la base ou le `-wal`. Étapes :
-    /// 1. fermeture du store : le conteneur fichier est remplacé par un conteneur vide en mémoire
-    ///    (plus aucune référence du dépôt vers l'ancien), store marqué indisponible ;
-    /// 2. `StoreFiles.eraseClosedStore` : dossier renommé atomiquement puis supprimé ;
-    /// 3. store vide recréé dans un dossier neuf et protégé, puis installé.
-    /// Si le renommage échoue, l'ancien store (déjà vidé) est rouvert : `.eraseFiles`.
-    /// Si la recréation échoue : store indisponible, `.reopenAfterErase`.
+    /// « Supprimer toutes les données » sur un store fichier. SQLite ne remet pas à zéro les pages
+    /// libérées (et `PRAGMA secure_delete` n'est pas accessible via SwiftData) : les prénoms
+    /// pourraient subsister dans la base ou le `-wal`. Étapes :
+    /// 0. conteneur de remplacement (vide, en mémoire) préparé ; marqueur « effacement en cours »
+    ///    écrit (`StoreFiles.writeErasureMarker`) : un plantage à partir d'ici est rattrapé au
+    ///    lancement suivant (effacement rejoué, jamais de migration de l'ancien emplacement) ;
+    /// 1. suppression logique en une transaction (sautée si le store est déjà indisponible après
+    ///    un effacement interrompu) ; en cas d'échec : marqueur retiré, `.write`, rien supprimé ;
+    /// 2. fermeture : le conteneur fichier est remplacé par le conteneur en mémoire, dans un
+    ///    `autoreleasepool` pour que l'ancien soit libéré (et SQLite fermé) sans attendre la fin du
+    ///    tour de boucle ; store marqué indisponible ;
+    /// 3. `StoreFiles.eraseClosedStore` (restes de l'ancien emplacement déplacés dans le dossier,
+    ///    dossier renommé atomiquement puis supprimé) ;
+    /// 4. store vide recréé et installé, puis marqueur retiré.
+    /// Renommage impossible : l'ancien store (déjà vidé) est rouvert, `.eraseFiles`.
+    /// Recréation ou retrait du marqueur impossible : store indisponible, `.reopenAfterErase`.
     private func eraseAndRecreateStore(_ fileStore: FileStore) throws(GameRepositoryError) {
+        let location = fileStore.location
+        let fileSystem = fileStore.fileSystem
         let placeholder: ModelContainer
         do {
             placeholder = try PersistenceController.makeContainer(storage: .inMemory)
         } catch {
-            // Store non fermé : rien n'est effacé, l'ancien conteneur reste en place.
-            throw GameRepositoryError.storageFailure(.eraseFiles, message: ErrorDiagnostics.summary(of: error))
+            throw GameRepositoryError.storageFailure(.write, message: ErrorDiagnostics.summary(of: error))
         }
-        isStoreAvailable = false
-        install(placeholder)
+        try StoreFiles.writeErasureMarker(for: location, fileSystem: fileSystem)
+
+        let logicalFailure: GameRepositoryError? = autoreleasepool {
+            if isStoreAvailable {
+                do {
+                    try deleteAllRecords()
+                } catch {
+                    return GameRepositoryError.from(error, operation: .write)
+                }
+            }
+            isStoreAvailable = false
+            install(placeholder)
+            return nil
+        }
+        if let logicalFailure {
+            // Rien n'a été supprimé : le marqueur ne doit pas provoquer d'effacement au lancement.
+            try? StoreFiles.removeErasureMarker(for: location, fileSystem: fileSystem)
+            throw logicalFailure
+        }
 
         var eraseError: GameRepositoryError?
         do {
-            let complete = try StoreFiles.eraseClosedStore(fileStore.location, fileSystem: fileStore.fileSystem)
+            let complete = try StoreFiles.eraseClosedStore(location, fileSystem: fileSystem)
             if !complete {
-                // Restes supprimés au prochain lancement (`StoreFiles.prepare`).
+                // Restes : voir `StoreFiles.eraseClosedStore` (retirés au lancement suivant ou au
+                // prochain effacement).
                 eraseError = .storageFailure(.eraseFiles, message: "ErasureLeftovers")
             }
         } catch {
-            // Dossier non renommé : rien n'est effacé, l'ancien store (déjà vidé) est rouvert.
+            // Dossier non renommé : l'ancien store (déjà vidé) est rouvert tel quel.
             eraseError = GameRepositoryError.from(error, operation: .eraseFiles)
         }
 
         let reopened: ModelContainer
         do {
-            reopened = try PersistenceController.makeEmptyFileContainer(
-                at: fileStore.location,
-                fileSystem: fileStore.fileSystem
-            )
+            reopened = try PersistenceController.makeEmptyFileContainer(at: location, fileSystem: fileSystem)
+            // Retrait après ouverture réussie ; sinon le lancement suivant effacerait les parties
+            // créées entre-temps : le store reste alors indisponible.
+            try StoreFiles.removeErasureMarker(for: location, fileSystem: fileSystem)
         } catch {
             throw GameRepositoryError.storageFailure(.reopenAfterErase, message: ErrorDiagnostics.summary(of: error))
         }

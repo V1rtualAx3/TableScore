@@ -41,6 +41,8 @@ protocol StoreFileSystem {
     /// Crée le dossier (et ses parents) avec la classe de protection ; sans effet s'il existe.
     func createDirectory(at url: URL, protection: FileProtectionType) throws
     func setProtection(_ protection: FileProtectionType, at url: URL) throws
+    /// Crée (ou remplace) un fichier vide avec la classe de protection.
+    func createEmptyFile(at url: URL, protection: FileProtectionType) throws
     /// Renommage ; échoue si la destination existe (jamais d'écrasement).
     func moveItem(at source: URL, to destination: URL) throws
     func removeItem(at url: URL) throws
@@ -66,6 +68,12 @@ struct LocalStoreFileSystem: StoreFileSystem {
 
     func setProtection(_ protection: FileProtectionType, at url: URL) throws {
         try FileManager.default.setAttributes([.protectionKey: protection], ofItemAtPath: url.path)
+    }
+
+    func createEmptyFile(at url: URL, protection: FileProtectionType) throws {
+        guard FileManager.default.createFile(atPath: url.path, contents: Data(), attributes: [.protectionKey: protection]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
     }
 
     func moveItem(at source: URL, to destination: URL) throws {
@@ -216,30 +224,79 @@ enum StoreFiles {
 
     // MARK: Exécution
 
-    /// Prépare le dossier avant ouverture : création protégée, nettoyage d'un effacement
-    /// interrompu, migration de l'ancien emplacement si `migrateLegacy`, protection des fichiers.
+    /// Marqueur « effacement en cours » : fichier vide **à côté** du dossier dédié
+    /// (`Application Support/Store-effacement-en-cours`), écrit avant la suppression logique et
+    /// retiré seulement une fois le store vide rouvert. Tant qu'il existe, l'ouverture rejoue
+    /// l'effacement et ne migre jamais l'ancien emplacement : un plantage à n'importe quelle étape
+    /// de « Supprimer toutes les données » ne laisse réapparaître aucune partie.
+    /// (Tiret et non point : `leftoverErasureNames` ne doit pas le confondre avec un dossier.)
+    static func erasureMarkerURL(for location: StoreLocation) -> URL {
+        location.directory.deletingLastPathComponent().appending(
+            path: location.directory.lastPathComponent + "-effacement-en-cours",
+            directoryHint: .notDirectory
+        )
+    }
+
+    static func writeErasureMarker(for location: StoreLocation, fileSystem: any StoreFileSystem) throws(GameRepositoryError) {
+        do {
+            try fileSystem.createEmptyFile(at: erasureMarkerURL(for: location), protection: protection)
+        } catch {
+            throw GameRepositoryError.storageFailure(.write, message: ErrorDiagnostics.summary(of: error))
+        }
+    }
+
+    static func removeErasureMarker(for location: StoreLocation, fileSystem: any StoreFileSystem) throws(GameRepositoryError) {
+        let marker = erasureMarkerURL(for: location)
+        guard fileSystem.itemExists(at: marker) else { return }
+        do {
+            try fileSystem.removeItem(at: marker)
+        } catch {
+            throw GameRepositoryError.storageFailure(.setup, message: ErrorDiagnostics.summary(of: error))
+        }
+    }
+
+    /// Contexte de préparation.
+    enum PreparationMode: Sendable {
+        /// Lancement : effacement interrompu rejoué (marqueur) sinon migration de l'ancien emplacement.
+        case launch
+        /// Recréation juste après l'effacement par le dépôt : ni rejeu ni migration.
+        case afterErase
+    }
+
+    /// Prépare le dossier avant ouverture : création protégée, effacement interrompu rejoué
+    /// (marqueur présent : **jamais** de migration dans ce cas), sinon migration de l'ancien
+    /// emplacement, retrait des restes, protection des fichiers.
     ///
     /// Une erreur n'est levée que si le store ne peut pas être ouvert sans risque (dossier
-    /// impossible à créer, migration impossible). La réapplication de la classe de protection et
-    /// le nettoyage sont « au mieux » : un échec ne doit pas priver la personne de ses parties, et
-    /// les fichiers gardent alors la classe par défaut d'iOS, identique. Valeur renvoyée : `true`
-    /// si la classe a été appliquée sans erreur au dossier et à chaque fichier présent.
+    /// impossible à créer, migration ou effacement impossible). La réapplication de la classe de
+    /// protection et le nettoyage sont « au mieux » : les fichiers gardent sinon la classe par
+    /// défaut d'iOS, identique. Valeur renvoyée : `true` si la classe a été appliquée sans erreur
+    /// au dossier et à chaque fichier présent. Le marqueur éventuel est retiré par l'appelant,
+    /// **après** ouverture réussie (`removeErasureMarker`).
     @discardableResult
     static func prepare(
         _ location: StoreLocation,
         fileSystem: any StoreFileSystem,
-        migrateLegacy: Bool = true
+        mode: PreparationMode = .launch
     ) throws(GameRepositoryError) -> Bool {
         let directory = location.directory
+        if mode == .launch, fileSystem.itemExists(at: erasureMarkerURL(for: location)) {
+            do {
+                _ = try eraseClosedStore(location, fileSystem: fileSystem)
+            } catch {
+                throw GameRepositoryError.storageFailure(.setup, message: "PendingErasureFailed")
+            }
+        }
         do {
             try fileSystem.createDirectory(at: directory, protection: protection)
         } catch {
             throw GameRepositoryError.storageFailure(.setup, message: ErrorDiagnostics.summary(of: error))
         }
         removeLeftoverErasures(of: location, fileSystem: fileSystem)
-        if migrateLegacy {
+        if mode == .launch, !fileSystem.itemExists(at: erasureMarkerURL(for: location)) {
             try migrateLegacyStore(to: location, fileSystem: fileSystem)
         }
+        removeObsoleteLegacyItems(of: location, fileSystem: fileSystem)
         // Le dossier existait peut-être avant (création sans effet) : classe réappliquée.
         var applied = (try? fileSystem.setProtection(protection, at: directory)) != nil
         for name in storeItemNames(storeFileName: location.fileName) {
@@ -258,6 +315,28 @@ enum StoreFiles {
         }
     }
 
+    /// Éléments de l'ancien store devenus obsolètes : lorsque la nouvelle base existe, une base ou
+    /// des annexes encore présentes à l'ancien emplacement ne peuvent pas provenir d'une migration
+    /// en cours (la base est déplacée en dernier) ; ce sont des restes d'un effacement inachevé.
+    /// Ils sont supprimés (au mieux). Les fichiers **mis de côté** n'y sont jamais inclus.
+    private static func removeObsoleteLegacyItems(of location: StoreLocation, fileSystem: any StoreFileSystem) {
+        guard let legacyDirectory = distinctLegacyDirectory(of: location),
+              fileSystem.itemExists(at: location.storeURL) else { return }
+        let present = names(in: legacyDirectory, fileSystem: fileSystem)
+        for name in storeItemNames(storeFileName: location.fileName) where present.contains(name) {
+            try? fileSystem.removeItem(at: legacyDirectory.appending(path: name, directoryHint: .notDirectory))
+        }
+    }
+
+    /// Dossier de l'ancien emplacement s'il est distinct du dossier dédié et de même nom de store.
+    private static func distinctLegacyDirectory(of location: StoreLocation) -> URL? {
+        guard let legacyURL = location.legacyStoreURL,
+              legacyURL.lastPathComponent == location.fileName else { return nil }
+        let legacyDirectory = legacyURL.deletingLastPathComponent()
+        guard legacyDirectory.standardizedFileURL != location.directory.standardizedFileURL else { return nil }
+        return legacyDirectory
+    }
+
     private static func names(in directory: URL, fileSystem: any StoreFileSystem) -> Set<String> {
         guard fileSystem.itemExists(at: directory) else { return [] }
         return Set((try? fileSystem.itemNames(in: directory)) ?? [])
@@ -268,10 +347,7 @@ enum StoreFiles {
         to location: StoreLocation,
         fileSystem: any StoreFileSystem
     ) throws(GameRepositoryError) {
-        guard let legacyURL = location.legacyStoreURL else { return }
-        let legacyDirectory = legacyURL.deletingLastPathComponent()
-        guard legacyDirectory.standardizedFileURL != location.directory.standardizedFileURL,
-              legacyURL.lastPathComponent == location.fileName else { return }
+        guard let legacyDirectory = distinctLegacyDirectory(of: location) else { return }
         let plan = legacyMigration(
             legacyNames: names(in: legacyDirectory, fileSystem: fileSystem),
             storeNames: names(in: location.directory, fileSystem: fileSystem),
@@ -302,6 +378,9 @@ enum StoreFiles {
     /// emplacement s'il en reste), sans jamais rien supprimer. Tout ou rien : en cas d'échec, les
     /// renommages déjà faits sont annulés et une erreur est levée. Renvoie le nombre d'éléments
     /// renommés (0 : aucun fichier de store présent).
+    ///
+    /// Refusé pendant une migration inachevée (ancienne base présente, nouvelle absente) : une base
+    /// et son `-wal` ne sont jamais renommés séparément dans deux dossiers.
     @discardableResult
     static func setAside(
         _ location: StoreLocation,
@@ -309,10 +388,16 @@ enum StoreFiles {
         date: Date
     ) throws(GameRepositoryError) -> Int {
         var directories = [location.directory]
-        if let legacyURL = location.legacyStoreURL,
-           legacyURL.lastPathComponent == location.fileName,
-           legacyURL.deletingLastPathComponent().standardizedFileURL != location.directory.standardizedFileURL {
-            directories.append(legacyURL.deletingLastPathComponent())
+        if let legacyDirectory = distinctLegacyDirectory(of: location) {
+            let migration = legacyMigration(
+                legacyNames: names(in: legacyDirectory, fileSystem: fileSystem),
+                storeNames: names(in: location.directory, fileSystem: fileSystem),
+                storeFileName: location.fileName
+            )
+            guard migration == .nothingToMove else {
+                throw GameRepositoryError.storageFailure(.setup, message: "PartialMigration")
+            }
+            directories.append(legacyDirectory)
         }
         var done: [(from: URL, to: URL)] = []
         for directory in directories {
@@ -338,53 +423,54 @@ enum StoreFiles {
         return done.count
     }
 
-    /// Effacement physique, **store fermé** : renomme atomiquement le dossier dédié en
-    /// `<dossier>.effacement-<UUID>`, y déplace les restes de l'ancien emplacement, puis le supprime.
+    /// Effacement physique, **store fermé** :
+    /// 1. les restes de l'ancien emplacement (ancien store, fichiers mis de côté) sont d'abord
+    ///    déplacés **dans** le dossier dédié (`ancien-<nom>`) ;
+    /// 2. le dossier dédié est renommé atomiquement en `<dossier>.effacement-<UUID>` ;
+    /// 3. ce dossier est supprimé.
     ///
-    /// - Le renommage préalable garantit que le store recréé ensuite part d'un dossier neuf, sans
-    ///   aucun fichier ancien (un `-wal` résiduel serait rejoué dans la nouvelle base), et qu'une
+    /// - Le renommage garantit que le store recréé ensuite part d'un dossier neuf, sans aucun
+    ///   fichier ancien (un `-wal` résiduel serait rejoué dans la nouvelle base), et qu'une
     ///   éventuelle connexion SQLite encore ouverte ne vise plus les nouveaux fichiers.
-    /// - Supprimer les fichiers (et non les vider) supprime aussi, sur appareil, leurs clés de
-    ///   chiffrement par fichier : les pages libres SQLite/WAL qui contenaient les prénoms ne sont
-    ///   plus lisibles. Les sauvegardes iCloud/ordinateur déjà faites ne sont pas concernées.
+    /// - Les fichiers sont supprimés, et non vidés. Sur appareil, la protection des données
+    ///   d'iOS chiffre chaque fichier avec sa propre clé, détruite à la suppression ; l'app ne peut
+    ///   pas le vérifier elle-même. Les sauvegardes iCloud/ordinateur déjà faites ne sont pas
+    ///   concernées.
     ///
-    /// Renvoie `true` si tout a été supprimé, `false` si des restes subsistent (ils seront retirés
-    /// au prochain lancement par `prepare`). Lève une erreur si le dossier n'a pas pu être renommé
-    /// (rien n'a été effacé ; le store peut être rouvert tel quel).
+    /// Renvoie `true` si tout a été supprimé, `false` si des restes subsistent : dossier
+    /// `<dossier>.effacement-…` (supprimé au lancement suivant par `prepare`) ou élément de
+    /// l'ancien emplacement non déplacé (ancien store : supprimé au lancement suivant par
+    /// `prepare` dès que la nouvelle base existe ; fichier mis de côté : au prochain effacement).
+    /// Lève une erreur si le dossier n'a pas pu être renommé (store laissé en place).
     static func eraseClosedStore(
         _ location: StoreLocation,
         fileSystem: any StoreFileSystem
     ) throws(GameRepositoryError) -> Bool {
         let directory = location.directory
+        do {
+            try fileSystem.createDirectory(at: directory, protection: protection)
+        } catch {
+            throw GameRepositoryError.storageFailure(.eraseFiles, message: ErrorDiagnostics.summary(of: error))
+        }
+
+        var complete = true
+        if let legacyDirectory = distinctLegacyDirectory(of: location) {
+            let legacyNames = (try? fileSystem.itemNames(in: legacyDirectory)) ?? []
+            for name in legacyErasableNames(in: legacyNames, storeFileName: location.fileName) {
+                let source = legacyDirectory.appending(path: name, directoryHint: .notDirectory)
+                let destination = directory.appending(path: "ancien-" + name, directoryHint: .notDirectory)
+                if (try? fileSystem.moveItem(at: source, to: destination)) == nil { complete = false }
+            }
+        }
+
         let trash = directory.deletingLastPathComponent().appending(
             path: directory.lastPathComponent + erasureMarker + UUID().uuidString,
             directoryHint: .isDirectory
         )
-        if fileSystem.itemExists(at: directory) {
-            do {
-                try fileSystem.moveItem(at: directory, to: trash)
-            } catch {
-                throw GameRepositoryError.storageFailure(.eraseFiles, message: ErrorDiagnostics.summary(of: error))
-            }
-        } else {
-            do {
-                try fileSystem.createDirectory(at: trash, protection: protection)
-            } catch {
-                throw GameRepositoryError.storageFailure(.eraseFiles, message: ErrorDiagnostics.summary(of: error))
-            }
-        }
-
-        var complete = true
-        if let legacyURL = location.legacyStoreURL {
-            let legacyDirectory = legacyURL.deletingLastPathComponent()
-            if legacyDirectory.standardizedFileURL != directory.standardizedFileURL {
-                let legacyNames = (try? fileSystem.itemNames(in: legacyDirectory)) ?? []
-                for name in legacyErasableNames(in: legacyNames, storeFileName: legacyURL.lastPathComponent) {
-                    let source = legacyDirectory.appending(path: name, directoryHint: .notDirectory)
-                    let destination = trash.appending(path: "ancien-" + name, directoryHint: .notDirectory)
-                    if (try? fileSystem.moveItem(at: source, to: destination)) == nil { complete = false }
-                }
-            }
+        do {
+            try fileSystem.moveItem(at: directory, to: trash)
+        } catch {
+            throw GameRepositoryError.storageFailure(.eraseFiles, message: ErrorDiagnostics.summary(of: error))
         }
         if (try? fileSystem.removeItem(at: trash)) == nil { complete = false }
         return complete

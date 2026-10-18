@@ -43,7 +43,8 @@ struct StorageErrorView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .accessibilityIdentifier(AccessibilityID.StorageError.retry)
-            if AppBootstrap.canSetAsideUnreadableData(context: context) {
+            // Uniquement pour un store réellement illisible, appareil déverrouillé.
+            if AppBootstrap.offersSetAsideNow(context: context) {
                 Button("Mettre de côté les données illisibles et repartir de zéro") {
                     isConfirmingSetAside = true
                 }

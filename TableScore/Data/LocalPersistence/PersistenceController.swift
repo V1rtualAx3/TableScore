@@ -173,9 +173,9 @@ enum PersistenceController {
                 cloudKitDatabase: .none
             )
         case .applicationSupport:
-            return try fileConfiguration(url: defaultStoreURL, schema: schema, allowsSave: allowsSave)
+            return fileConfiguration(url: defaultStoreURL, schema: schema, allowsSave: allowsSave)
         case .file(let url):
-            return try fileConfiguration(url: url, schema: schema, allowsSave: allowsSave)
+            return fileConfiguration(url: url, schema: schema, allowsSave: allowsSave)
         }
     }
 
@@ -186,10 +186,25 @@ enum PersistenceController {
         allowsSave: Bool = true,
         fileSystem: any StoreFileSystem = LocalStoreFileSystem()
     ) throws(GameRepositoryError) -> ModelContainer {
-        if let location = storeLocation(for: storage) {
-            try StoreFiles.prepare(location, fileSystem: fileSystem)
+        guard let location = storeLocation(for: storage) else {
+            return try openContainer(storage: storage, allowsSave: allowsSave)
         }
-        return try openContainer(storage: storage, allowsSave: allowsSave)
+        return try openFileContainer(location, allowsSave: allowsSave, fileSystem: fileSystem)
+    }
+
+    /// Lancement d'un store fichier : préparation (effacement interrompu rejoué, sinon migration),
+    /// ouverture, puis retrait du marqueur d'effacement **après** ouverture réussie. Si le marqueur
+    /// ne peut pas être retiré, l'ouverture est refusée : sinon le prochain lancement effacerait
+    /// les parties créées entre-temps.
+    private static func openFileContainer(
+        _ location: StoreLocation,
+        allowsSave: Bool,
+        fileSystem: any StoreFileSystem
+    ) throws(GameRepositoryError) -> ModelContainer {
+        try StoreFiles.prepare(location, fileSystem: fileSystem, mode: .launch)
+        let container = try openContainer(storage: .file(location.storeURL), allowsSave: allowsSave)
+        try StoreFiles.removeErasureMarker(for: location, fileSystem: fileSystem)
+        return container
     }
 
     /// Après « Supprimer toutes les données » : recrée le store vide dans un dossier neuf (ou rouvre
@@ -199,7 +214,7 @@ enum PersistenceController {
         at location: StoreLocation,
         fileSystem: any StoreFileSystem
     ) throws(GameRepositoryError) -> ModelContainer {
-        try StoreFiles.prepare(location, fileSystem: fileSystem, migrateLegacy: false)
+        try StoreFiles.prepare(location, fileSystem: fileSystem, mode: .afterErase)
         return try openContainer(storage: .file(location.storeURL), allowsSave: true)
     }
 
@@ -216,7 +231,8 @@ enum PersistenceController {
                 configurations: configuration
             )
         } catch {
-            throw GameRepositoryError.storageFailure(.setup, message: ErrorDiagnostics.summary(of: error))
+            // Seul cas où « Mettre de côté » est proposé : le store existe mais ne s'ouvre pas.
+            throw GameRepositoryError.storageFailure(.openStore, message: ErrorDiagnostics.summary(of: error))
         }
     }
 
@@ -251,8 +267,7 @@ enum PersistenceController {
         location: StoreLocation,
         fileSystem: any StoreFileSystem = LocalStoreFileSystem()
     ) throws(GameRepositoryError) -> SwiftDataGameRepository {
-        try StoreFiles.prepare(location, fileSystem: fileSystem)
-        let container = try openContainer(storage: .file(location.storeURL), allowsSave: true)
+        let container = try openFileContainer(location, allowsSave: true, fileSystem: fileSystem)
         return SwiftDataGameRepository(
             container: container,
             fileStore: SwiftDataGameRepository.FileStore(location: location, fileSystem: fileSystem)
@@ -275,17 +290,10 @@ enum PersistenceController {
         url: URL,
         schema: Schema,
         allowsSave: Bool
-    ) throws(GameRepositoryError) -> ModelConfiguration {
-        do {
-            // `Application Support` n'existe pas encore lors d'une installation fraîche.
-            try LocalStoreFileSystem().createDirectory(
-                at: url.deletingLastPathComponent(),
-                protection: StoreFiles.protection
-            )
-        } catch {
-            throw GameRepositoryError.storageFailure(.setup, message: ErrorDiagnostics.summary(of: error))
-        }
-        return ModelConfiguration(
+    ) -> ModelConfiguration {
+        // Aucun accès disque ici : le dossier est créé et protégé par `StoreFiles.prepare`
+        // (via le système de fichiers injecté) avant toute ouverture.
+        ModelConfiguration(
             "TableScore",
             schema: schema,
             url: url,

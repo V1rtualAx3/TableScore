@@ -545,9 +545,8 @@ struct PersistenceSwiftDataTests {
     ///   fichier d'entitlements. Aucune capability CloudKit ne peut être ajoutée sans faire échouer
     ///   la CI (motifs exacts : voir le script).
     ///
-    /// Effet de bord assumé : `makeConfiguration(.applicationSupport)` crée le dossier
-    /// `Library/Application Support/Store` du conteneur de l'app hôte s'il n'existe pas (dossier
-    /// vide, aucun store n'est ouvert ni créé, aucune migration n'est faite).
+    /// `makeConfiguration(.applicationSupport)` n'accède pas au disque : le dossier est créé et
+    /// protégé uniquement par `StoreFiles.prepare`, avant ouverture.
     @Test("Configuration réelle (Application Support) : ni CloudKit ni conteneur partagé")
     func realConfigurationIsLocalOnly() throws {
         // Inspecte la configuration sans ouvrir le store.

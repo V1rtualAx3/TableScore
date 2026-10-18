@@ -85,7 +85,10 @@ enum ErrorDiagnostics {
 
 /// Opération de stockage ayant échoué.
 enum StorageOperation: String, Sendable, Hashable {
+    /// Préparation du stockage (dossier, migration, effacement interrompu) : fichiers non ouverts.
     case setup
+    /// Le store existe mais SwiftData n'a pas pu l'ouvrir (fichier illisible, schéma inconnu…).
+    case openStore
     case read
     case write
     case encoding
@@ -166,7 +169,7 @@ enum GameRepositoryError: Error, Sendable, Hashable {
             String(localized: "Cette action entre en conflit avec une saisie déjà enregistrée.")
         case .corruptedData:
             String(localized: "Certaines données enregistrées sont illisibles.")
-        case .storageFailure(.setup, _), .storageFailure(.read, _):
+        case .storageFailure(.setup, _), .storageFailure(.openStore, _), .storageFailure(.read, _):
             String(localized: "Impossible de lire les données enregistrées.")
         case .storageFailure(.write, _), .storageFailure(.encoding, _):
             String(localized: "L'enregistrement a échoué. Aucune modification n'a été faite.")
@@ -337,7 +340,8 @@ protocol GameRepository: AnyObject {
     /// Échec après la transaction : `storageFailure(.eraseFiles)` (stockage toujours utilisable)
     /// ou `storageFailure(.reopenAfterErase)` (stockage indisponible jusqu'au relancement) ; dans
     /// les deux cas les parties sont déjà supprimées (`gamesWereDeletedBeforeFailure`), jamais de
-    /// faux succès. Un nouvel appel reprend l'effacement.
+    /// faux succès. Un nouvel appel reprend l'effacement ; un marqueur « effacement en cours »
+    /// le fait aussi rejouer au lancement suivant après un plantage (`StoreFiles`).
     func deleteAllGames() throws(GameRepositoryError)
 }
 

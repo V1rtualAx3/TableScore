@@ -16,6 +16,8 @@ final class RecordingStoreFileSystem: StoreFileSystem {
     var failsMove: (URL, URL) -> Bool = { _, _ in false }
     /// Création de dossier refusée si la fonction renvoie `true`.
     var failsCreateDirectory: (URL) -> Bool = { _ in false }
+    /// Suppression refusée si la fonction renvoie `true`.
+    var failsRemove: (URL) -> Bool = { _ in false }
 
     func itemExists(at url: URL) -> Bool { base.itemExists(at: url) }
     func itemNames(in directory: URL) throws -> [String] { try base.itemNames(in: directory) }
@@ -36,7 +38,14 @@ final class RecordingStoreFileSystem: StoreFileSystem {
         try base.moveItem(at: source, to: destination)
     }
 
-    func removeItem(at url: URL) throws { try base.removeItem(at: url) }
+    func createEmptyFile(at url: URL, protection: FileProtectionType) throws {
+        try base.createEmptyFile(at: url, protection: protection)
+    }
+
+    func removeItem(at url: URL) throws {
+        if failsRemove(url) { throw SimulatedFailure() }
+        try base.removeItem(at: url)
+    }
 
     func requestedProtection(for url: URL) -> [FileProtectionType] {
         protectionRequests.filter { $0.url.standardizedFileURL == url.standardizedFileURL }.map(\.protection)
@@ -96,6 +105,10 @@ struct PersistenceStoreFilesTests {
             if data.range(of: bytes) != nil { matches.append(url.lastPathComponent) }
         }
         return matches
+    }
+
+    private var releaseContext: PersistenceController.LaunchContext {
+        .init(arguments: [], environment: [:], isDebugBuild: false)
     }
 
     private func isStorageFailure(_ error: GameRepositoryError?, _ operation: StorageOperation) -> Bool {
@@ -353,6 +366,7 @@ struct PersistenceStoreFilesTests {
         #expect(isStorageFailure(error, .eraseFiles))
         #expect(error?.gamesWereDeletedBeforeFailure == true)
         #expect(repo.isStoreAvailable)
+        #expect(!FileManager.default.fileExists(atPath: StoreFiles.erasureMarkerURL(for: location).path))
         #expect(try repo.activeGame() == nil)
         #expect(try repo.closedGames().isEmpty)
 
@@ -370,7 +384,11 @@ struct PersistenceStoreFilesTests {
         let fileSystem = RecordingStoreFileSystem()
         let repo = try PersistenceController.makeRepository(location: location, fileSystem: fileSystem)
         try populate(repo)
-        fileSystem.failsCreateDirectory = { $0.standardizedFileURL == location.directory.standardizedFileURL }
+        // Recréation refusée : le dossier n'existe plus (il vient d'être renommé puis supprimé).
+        fileSystem.failsCreateDirectory = {
+            $0.standardizedFileURL == location.directory.standardizedFileURL
+                && !FileManager.default.fileExists(atPath: location.directory.path)
+        }
 
         let error = repositoryError { try repo.deleteAllGames() }
         #expect(isStorageFailure(error, .reopenAfterErase))
@@ -457,7 +475,9 @@ struct PersistenceStoreFilesTests {
         try FileManager.default.createDirectory(at: location.directory, withIntermediateDirectories: true)
         #expect(FileManager.default.createFile(atPath: location.storeURL.path, contents: Data(repeating: 0x5A, count: 4096)))
 
-        #expect(repositoryError { _ = try PersistenceController.makeRepository(location: location) } != nil)
+        let openError = repositoryError { _ = try PersistenceController.makeRepository(location: location) }
+        #expect(isStorageFailure(openError, .openStore))
+        #expect(AppBootstrap.offersSetAside(after: openError, context: releaseContext, protectedDataAvailable: true))
 
         #expect(try PersistenceController.setAsideUnreadableStore(
             storage: .file(location.storeURL),
@@ -493,11 +513,19 @@ struct PersistenceStoreFilesTests {
         let location = makeLocation(in: base)
         #expect(try StoreFiles.setAside(location, fileSystem: LocalStoreFileSystem(), date: Date()) == 0)
 
+        // Ancienne base seule (migration inachevée) : refus, rien n'est renommé.
         #expect(FileManager.default.createFile(atPath: base.appending(path: "TableScore.store").path, contents: Data([1])))
+        #expect(repositoryError { _ = try StoreFiles.setAside(location, fileSystem: LocalStoreFileSystem(), date: Date()) } != nil)
+        #expect(names(in: base).contains("TableScore.store"))
+
+        // Nouvelle base présente : les deux emplacements sont mis de côté.
+        try FileManager.default.createDirectory(at: location.directory, withIntermediateDirectories: true)
+        #expect(FileManager.default.createFile(atPath: location.storeURL.path, contents: Data([2])))
         let date = Date(timeIntervalSince1970: 1_792_337_400)
-        #expect(try StoreFiles.setAside(location, fileSystem: LocalStoreFileSystem(), date: date) == 1)
+        #expect(try StoreFiles.setAside(location, fileSystem: LocalStoreFileSystem(), date: date) == 2)
         #expect(names(in: base).contains("TableScore-illisible-20261018-153000.store"))
         #expect(!names(in: base).contains("TableScore.store"))
+        #expect(names(in: location.directory) == ["TableScore-illisible-20261018-153000.store"])
     }
 
     @Test("Mise de côté proposée seulement pour un stockage fichier")
@@ -510,5 +538,139 @@ struct PersistenceStoreFilesTests {
             #expect(!AppBootstrap.canSetAsideUnreadableData(context: .current))
         }
         #expect(try PersistenceController.setAsideUnreadableStore(storage: .inMemory) == 0)
+    }
+    // MARK: Résistance au plantage (marqueur d'effacement)
+
+    @Test("Effacement interrompu après renommage, ancienne base présente : relance ⇒ aucun prénom relu")
+    func interruptedEraseIsReplayedAtLaunch() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let location = makeLocation(in: base)
+        let fileSystem = RecordingStoreFileSystem()
+        let repo = try PersistenceController.makeRepository(location: location, fileSystem: fileSystem)
+        try populate(repo)
+        let legacyURL = try #require(location.legacyStoreURL)
+        #expect(FileManager.default.createFile(atPath: legacyURL.path, contents: Data(Self.witnessName.utf8)))
+        // Ancienne base non déplaçable, puis recréation impossible (« plantage » après renommage).
+        fileSystem.failsMove = { source, _ in source.standardizedFileURL == legacyURL.standardizedFileURL }
+        fileSystem.failsCreateDirectory = {
+            $0.standardizedFileURL == location.directory.standardizedFileURL
+                && !FileManager.default.fileExists(atPath: location.directory.path)
+        }
+        _ = repositoryError { try repo.deleteAllGames() }
+        #expect(FileManager.default.fileExists(atPath: StoreFiles.erasureMarkerURL(for: location).path))
+        #expect(FileManager.default.fileExists(atPath: legacyURL.path))
+
+        // Relance : effacement rejoué, ancienne base jamais migrée.
+        let relaunched = try PersistenceController.makeRepository(location: location)
+        #expect(try relaunched.activeGame() == nil)
+        #expect(try relaunched.closedGames().isEmpty)
+        #expect(files(containing: Self.witnessName, under: base).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: StoreFiles.erasureMarkerURL(for: location).path))
+        #expect(names(in: base) == ["Store"])
+    }
+
+    @Test("Plantage entre suppression logique et effacement physique : rattrapé au lancement")
+    func markerAloneTriggersErasureAtLaunch() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let location = makeLocation(in: base)
+        do {
+            let repo = try PersistenceController.makeRepository(location: location)
+            try populate(repo)
+        }
+        try StoreFiles.writeErasureMarker(for: location, fileSystem: LocalStoreFileSystem())
+
+        let relaunched = try PersistenceController.makeRepository(location: location)
+        #expect(try relaunched.activeGame() == nil)
+        #expect(files(containing: Self.witnessName, under: base).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: StoreFiles.erasureMarkerURL(for: location).path))
+    }
+
+    @Test("Échec de la suppression logique : marqueur retiré, rien n'est effacé au lancement")
+    func logicalFailureRemovesMarker() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let location = makeLocation(in: base)
+        let failures = SaveFailureSwitch()
+        let fileSystem = LocalStoreFileSystem()
+        try StoreFiles.prepare(location, fileSystem: fileSystem)
+        let repo = SwiftDataGameRepository(
+            container: try PersistenceController.makeContainer(storage: .file(location.storeURL)),
+            fileStore: .init(location: location, fileSystem: fileSystem),
+            saveHandler: { try failures.save($0) }
+        )
+        try populate(repo)
+        failures.failNextSave = true
+        let error = repositoryError { try repo.deleteAllGames() }
+        #expect(error?.isWriteFailure == true)
+        #expect(error?.gamesWereDeletedBeforeFailure == false)
+        #expect(!FileManager.default.fileExists(atPath: StoreFiles.erasureMarkerURL(for: location).path))
+        #expect(try repo.game(id: Fx.gameA).participants.first?.displayName == Self.witnessName)
+    }
+
+    @Test("L'ancien conteneur est libéré après l'effacement (référence faible)")
+    func oldContainerIsReleased() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let location = makeLocation(in: base)
+        let repo = try PersistenceController.makeRepository(location: location)
+        weak var oldContainer: ModelContainer?
+        try autoreleasepool {
+            try populate(repo)
+            oldContainer = repo.currentContainer
+        }
+        #expect(oldContainer != nil)
+        try autoreleasepool { try repo.deleteAllGames() }
+        #expect(oldContainer == nil)
+    }
+
+    @Test("Lancement : restes de l'ancien store retirés si la nouvelle base existe ; mis de côté conservés")
+    func launchRemovesObsoleteLegacyItems() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let location = makeLocation(in: base)
+        do { _ = try PersistenceController.makeRepository(location: location) }
+        for name in ["TableScore.store", "TableScore.store-wal", "TableScore-illisible-1.store", "autre.txt"] {
+            #expect(FileManager.default.createFile(atPath: base.appending(path: name).path, contents: Data([1])))
+        }
+        _ = try PersistenceController.makeRepository(location: location)
+        #expect(names(in: base) == ["Store", "TableScore-illisible-1.store", "autre.txt"])
+    }
+
+    // MARK: Mise de côté : seulement pour un store réellement illisible
+
+    @Test("Mise de côté non proposée : conflit de migration, échec de déplacement, données protégées")
+    func setAsideNotOfferedForSetupFailures() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let location = makeLocation(in: base)
+        let legacyURL = try #require(location.legacyStoreURL)
+
+        // Conflit : annexe aux deux emplacements, nouvelle base absente.
+        try FileManager.default.createDirectory(at: location.directory, withIntermediateDirectories: true)
+        #expect(FileManager.default.createFile(atPath: legacyURL.path, contents: Data([1])))
+        #expect(FileManager.default.createFile(atPath: legacyURL.path + "-wal", contents: Data([1])))
+        #expect(FileManager.default.createFile(atPath: location.storeURL.path + "-wal", contents: Data([1])))
+        let conflict = repositoryError { _ = try PersistenceController.makeRepository(location: location) }
+        #expect(isStorageFailure(conflict, .setup))
+        #expect(!AppBootstrap.offersSetAside(after: conflict, context: releaseContext, protectedDataAvailable: true))
+
+        // Échec de déplacement pendant la migration.
+        try FileManager.default.removeItem(atPath: location.storeURL.path + "-wal")
+        let failing = RecordingStoreFileSystem()
+        failing.failsMove = { _, _ in true }
+        let moveFailure = repositoryError { _ = try PersistenceController.makeRepository(location: location, fileSystem: failing) }
+        #expect(isStorageFailure(moveFailure, .setup))
+        #expect(!AppBootstrap.offersSetAside(after: moveFailure, context: releaseContext, protectedDataAvailable: true))
+
+        // Store illisible mais appareil pas encore déverrouillé, ou stockage en mémoire.
+        let unreadable = GameRepositoryError.storageFailure(.openStore, message: "")
+        #expect(AppBootstrap.offersSetAside(after: unreadable, context: releaseContext, protectedDataAvailable: true))
+        #expect(!AppBootstrap.offersSetAside(after: unreadable, context: releaseContext, protectedDataAvailable: false))
+        if PersistenceController.isDebugBuild {
+            #expect(!AppBootstrap.offersSetAside(after: unreadable, context: .current, protectedDataAvailable: true))
+        }
+        #expect(!AppBootstrap.offersSetAside(after: nil, context: releaseContext, protectedDataAvailable: true))
     }
 }
