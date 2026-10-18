@@ -1,0 +1,55 @@
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- Xcode : données utilisateur et produits de build ---
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+build/
+*.moved-aside
+*.hmap
+*.xcresult
+timeline.xctimeline
+playground.xcworkspace
+
+# --- Swift Package Manager ---
+.build/
+.swiftpm/
+# Package.resolved n'est volontairement PAS ignoré : le package local n'a
+# aucune dépendance aujourd'hui ; si une dépendance était un jour acceptée,
+# son verrouillage devra être versionné (contrôle de la chaîne d'approvisionnement).
+
+# --- Signature, distribution et secrets : ne jamais versionner ---
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+*.keychain
+*.keychain-db
+.env
+.env.*
+
+# --- Outils locaux ---
+.vscode/
+.idea/
+# Réglages Claude Code propres à un poste (les agents et instructions restent versionnés).
+.claude/settings.local.json
+
+# --- Archives, clés et sorties fastlane : ne jamais versionner ---
+*.xcarchive
+*.pem
+*.key
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+fastlane/builds/

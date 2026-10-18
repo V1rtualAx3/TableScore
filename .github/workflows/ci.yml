@@ -1,0 +1,188 @@
+# CI TableScore : tests du moteur (Linux, peu coûteux) puis build + tests iOS
+# sur simulateur (macOS, coûteux, exécuté seulement si le moteur est vert).
+#
+# Déclencheurs volontairement restreints pour éviter les doubles exécutions :
+# une PR vers main ne déclenche que l'événement pull_request (pas de push sur
+# toutes les branches). Le push sur main valide l'état fusionné.
+#
+# PIÈGE paths-ignore : une PR ne modifiant que de la documentation (*.md,
+# .claude/**) ne lance AUCUN job. Si « package-tests » ou « ios » deviennent un
+# jour des checks requis par une règle de protection de branche, ces PR
+# resteront bloquées en « Expected — Waiting for status ». Il faudra alors
+# retirer paths-ignore et filtrer au niveau des étapes/jobs (ou ajouter un job
+# toujours exécuté servant de check requis).
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - ".claude/**"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - ".claude/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Annule les doublons de PR seulement : un push sur main (ou un lancement manuel)
+  # n'est jamais annulé, afin que chaque commit de main soit validé.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  package-tests:
+    name: Moteur (SwiftPM Linux) + contrôle zéro réseau
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Image officielle Swift épinglée par version ET digest (index multi-arch).
+    # Swift 6.1.x = même famille de compilateur que Xcode 16.4 (Swift 6.1.2)
+    # utilisé par le job iOS : évite qu'une syntaxe acceptée ici échoue là-bas.
+    # Mise à jour : relever le digest de la nouvelle étiquette sur Docker Hub.
+    container:
+      image: swift:6.1.3-noble@sha256:04b28d4aff67fa4ff4029d6e27dd40f9737cc69cc558a37b06f18b3dceb8942f
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Contrôle statique zéro réseau et chaîne d'approvisionnement
+        # Heuristique STRICTE (voir scripts/ci/check-no-network.sh) : toutes les lignes
+        # sont scannées, commentaires inclus (faux positifs acceptés). Couvre API réseau,
+        # imports de frameworks, URL (casse ignorée), code natif, dépendances distantes,
+        # entitlements, permissions, ATS, arrière-plan, CloudKit.
+        run: bash scripts/ci/check-no-network.sh .
+
+      - name: Non-régression du contrôle (fixtures négatives)
+        run: bash scripts/ci/test-checks.sh
+
+      - name: Version de Swift
+        run: swift --version
+
+      - name: Tests du package TableScoreKit
+        working-directory: Packages/TableScoreKit
+        run: swift test
+
+  ios:
+    name: Build + tests iOS (simulateur)
+    needs: package-tests
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      # Xcode 16.4 (iOS 18.5 SDK) : présent et par défaut sur l'image macos-15
+      # (README actions/runner-images, image 20260824). Repli documenté dans
+      # l'étape de sélection.
+      XCODE_PREFERRED: "16.4"
+      PROJECT: TableScore.xcodeproj
+      SCHEME: TableScore
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Sélection explicite de Xcode 16.x
+        # Ordre : Xcode_${XCODE_PREFERRED} puis le Xcode 16.x le plus récent
+        # présent (liste explicite pour éviter un tri lexicographique trompeur).
+        # Sans Xcode 16.x, échec explicite plutôt qu'un changement silencieux de
+        # SDK (Xcode 26 imposerait d'autres simulateurs/runtimes).
+        run: |
+          set -euo pipefail
+          echo "Xcode installés sur le runner :"
+          ls -1d /Applications/Xcode*.app
+          selected=""
+          for version in "$XCODE_PREFERRED" 16.4 16.3 16.2 16.1 16.0; do
+            if [ -d "/Applications/Xcode_${version}.app" ]; then
+              selected="/Applications/Xcode_${version}.app"
+              break
+            fi
+          done
+          if [ -z "$selected" ]; then
+            echo "::error::Aucun Xcode 16.x trouvé sur l'image macos-15."
+            exit 1
+          fi
+          if [ "$selected" != "/Applications/Xcode_${XCODE_PREFERRED}.app" ]; then
+            echo "::warning::Xcode ${XCODE_PREFERRED} absent ; repli sur ${selected}."
+          fi
+          sudo xcode-select -s "${selected}/Contents/Developer"
+          xcode-select -p
+          xcodebuild -version
+
+      - name: Tests du package TableScoreKit (macOS, Foundation Darwin)
+        run: swift test --package-path Packages/TableScoreKit
+
+      - name: Inventaire du projet et des simulateurs
+        run: |
+          set -euo pipefail
+          xcodebuild -list -project "$PROJECT"
+          xcrun simctl list devices available
+
+      - name: Choix dynamique d'un simulateur iPhone iOS 18.x
+        run: |
+          set -euo pipefail
+          # Plus récent runtime iOS 18.x, puis premier iPhone par ordre alphabétique.
+          udid="$(xcrun simctl list devices available --json | jq -r '
+            [ .devices | to_entries[]
+              | select(.key | test("SimRuntime\\.iOS-18-[0-9]+(-[0-9]+)?$"))
+              | (.key | capture("iOS-18-(?<minor>[0-9]+)").minor | tonumber) as $minor
+              | .value[]
+              | select(.isAvailable == true and (.name | startswith("iPhone")))
+              | { udid, name, minor: $minor } ]
+            | sort_by(-.minor, .name)
+            | (.[0].udid // "")')"
+          if [ -z "$udid" ]; then
+            echo "::error::Aucun simulateur iPhone iOS 18.x disponible."
+            exit 1
+          fi
+          echo "Simulateur retenu : $udid"
+          xcrun simctl list devices available | grep "$udid"
+          echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
+
+      - name: Démarrage du simulateur
+        run: xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Build pour tests (sans signature)
+        run: |
+          set -euo pipefail
+          xcodebuild build-for-testing \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Inspection binaire zéro réseau (otool / nm)
+        # Complète le contrôle statique (heuristique) sur le binaire réellement produit.
+        run: bash scripts/ci/check-binary.sh "$RUNNER_TEMP/DerivedData"
+
+      - name: Tests unitaires et UI
+        run: |
+          set -euo pipefail
+          xcodebuild test-without-building \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Conservation du résultat de tests en cas d'échec
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: TestResults-xcresult
+          path: ${{ runner.temp }}/TestResults.xcresult
+          retention-days: 7
+          if-no-files-found: ignore
