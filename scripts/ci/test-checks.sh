@@ -35,4 +35,43 @@ expect_fail config 'NSCameraUsageDescription' 'NSBonjourServices' 'NSAppTranspor
 expect_fail entitlements 'App.entitlements'
 expect_fail cloudkit 'cloudKitDatabase: .automatic' 'cloudKitDatabase:.private' 'import CloudKit'
 
+# --- check-binary.sh / check-release-symbols.sh : logique testée avec des outils factices ---
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+stubs="$tmp/stubs"; mkdir -p "$stubs"
+printf '#!/usr/bin/env bash\ncat "${STUB_NM_FILE:-/dev/null}"\n' >"$stubs/nm"
+printf '#!/usr/bin/env bash\ncat "${STUB_STRINGS_FILE:-/dev/null}"\n' >"$stubs/strings"
+printf '#!/usr/bin/env bash\necho "$1"\n' >"$stubs/otool"
+chmod +x "$stubs"/nm "$stubs"/strings "$stubs"/otool
+mkdir -p "$tmp/dd/Build/Products/Release-iphonesimulator/TableScore.app"
+: >"$tmp/dd/Build/Products/Release-iphonesimulator/TableScore.app/TableScore"
+
+run_symbols() { # nm_content strings_content -> code dans rc, sortie dans out
+  printf '%s\n' "$1" >"$tmp/nm.txt"; printf '%s\n' "$2" >"$tmp/strings.txt"
+  rc=0
+  out="$(NM="$stubs/nm" STRINGS="$stubs/strings" STUB_NM_FILE="$tmp/nm.txt" STUB_STRINGS_FILE="$tmp/strings.txt" \
+    bash "$here/check-release-symbols.sh" "$tmp/dd" 2>&1)" || rc=$?
+}
+
+run_symbols '_main
+$s10TableScore7AppRootV' 'Hello'
+if [ "$rc" -eq 0 ]; then echo "ok  release-symbols clean"; else echo "KO  release-symbols clean : $out"; failed=1; fi
+
+for sym in UITestSeed previewEnvironment simulatesWriteFailure uiTestingPersistentStore resetUITestStore InMemoryGameRepository; do
+  run_symbols "_main $sym" 'Hello'
+  if [ "$rc" -eq 1 ] && grep -qF -- "::error::" <<<"$out" && grep -qF -- "$sym" <<<"$out"; then echo "ok  release-symbols nm $sym"; else echo "KO  release-symbols nm $sym (code $rc)"; failed=1; fi
+  run_symbols '_main' "-$sym"
+  if [ "$rc" -eq 1 ] && grep -qF -- "$sym" <<<"$out"; then echo "ok  release-symbols strings $sym"; else echo "KO  release-symbols strings $sym (code $rc)"; failed=1; fi
+done
+
+rc=0; out="$(bash "$here/check-release-symbols.sh" "$tmp/absent" 2>&1)" || rc=$?
+if [ "$rc" -eq 1 ]; then echo "ok  release-symbols bundle absent"; else echo "KO  release-symbols bundle absent (code $rc)"; failed=1; fi
+
+# check-binary.sh : symbole réseau non résolu bloquant, sinon OK.
+printf '_main\n' >"$tmp/nm.txt"
+rc=0; out="$(OTOOL="$stubs/otool" NM="$stubs/nm" STUB_NM_FILE="$tmp/nm.txt" bash "$here/check-binary.sh" "$tmp/dd" 2>&1)" || rc=$?
+if [ "$rc" -eq 0 ]; then echo "ok  binary clean"; else echo "KO  binary clean : $out"; failed=1; fi
+printf '_OBJC_CLASS_$_NSURLSession\n' >"$tmp/nm.txt"
+rc=0; out="$(OTOOL="$stubs/otool" NM="$stubs/nm" STUB_NM_FILE="$tmp/nm.txt" bash "$here/check-binary.sh" "$tmp/dd" 2>&1)" || rc=$?
+if [ "$rc" -eq 1 ]; then echo "ok  binary URLSession"; else echo "KO  binary URLSession (code $rc)"; failed=1; fi
+
 [ "$failed" -eq 0 ] && echo "OK : tous les cas de non-régression passent." || { echo "ÉCHEC"; exit 1; }

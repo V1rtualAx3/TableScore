@@ -200,6 +200,33 @@ final class SwiftDataGameRepository: GameRepository {
         return deletion
     }
 
+    func deleteRoundsAfterEarlyEnd(
+        gameID: UUID,
+        confirmedRoundIDs: [UUID]
+    ) throws(GameRepositoryError) -> SavedGame {
+        discardPendingChanges()
+        let record = try requireRecord(id: gameID)
+        let plan = try GameWritePlanner.planDeleteRoundsAfterEarlyEnd(
+            try map(record),
+            confirmedRoundIDs: confirmedRoundIDs,
+            at: now()
+        )
+        let removedIDs = Set(plan.removedRounds.map(\.id))
+        let doomed = record.rounds.filter { removedIDs.contains($0.roundID) }
+        // Chaque manche supprimée doit correspondre à exactement un enregistrement.
+        guard doomed.count == removedIDs.count, Set(doomed.map(\.roundID)) == removedIDs else {
+            let missing = removedIDs.subtracting(doomed.map(\.roundID)).first ?? gameID
+            throw GameRepositoryError.corruptedData(gameID: gameID, .missingRoundRecord(roundID: missing))
+        }
+        for roundRecord in doomed {
+            context.delete(roundRecord)
+        }
+        RecordMapper.apply(plan.game, toHeaderOf: record)
+        // Une seule sauvegarde : toutes les manches ou aucune (contexte abandonné en cas d'échec).
+        try commit()
+        return plan.game
+    }
+
     func finishGame(id: UUID) throws(GameRepositoryError) -> SavedGame {
         discardPendingChanges()
         let record = try requireRecord(id: id)
@@ -249,6 +276,21 @@ final class SwiftDataGameRepository: GameRepository {
         }
         try commit()
         return true
+    }
+
+    func deleteAllGames() throws(GameRepositoryError) {
+        discardPendingChanges()
+        // Aucun décodage : fonctionne aussi sur des parties illisibles ou dupliquées.
+        let records = try fetch(FetchDescriptor<GameRecord>())
+        // Enfants orphelins éventuels inclus : « tout supprimer » ne laisse aucune donnée.
+        let rounds = try fetch(FetchDescriptor<RoundRecord>())
+        let participants = try fetch(FetchDescriptor<ParticipantRecord>())
+        guard !records.isEmpty || !rounds.isEmpty || !participants.isEmpty else { return }
+        for roundRecord in rounds { context.delete(roundRecord) }
+        for participantRecord in participants { context.delete(participantRecord) }
+        for record in records { context.delete(record) }
+        // Une seule sauvegarde : tout ou rien (contexte abandonné en cas d'échec).
+        try commit()
     }
 
     // MARK: Application des plans

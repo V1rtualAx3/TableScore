@@ -102,7 +102,18 @@ avion** avant chaque livraison. Des fixtures négatives (`scripts/ci/fixtures/`,
 1. **package-tests** (`ubuntu-24.04`, image officielle `swift:6.1.3` épinglée par digest) : contrôles
    statiques zéro réseau puis `swift test` du package.
 2. **ios** (`macos-15`, Xcode 16.4) : lancé seulement si le premier job réussit ; sélection dynamique
-   d'un simulateur iPhone iOS 18.x, `build-for-testing` puis tests unitaires et UI, sans signature.
+   d'un simulateur iPhone iOS 18.x, `build-for-testing` puis tests unitaires et UI, sans signature ;
+   enfin un **build Release** (`-configuration Release`, DerivedData dédié) vérifié par
+   `scripts/ci/check-binary.sh` puis `scripts/ci/check-release-symbols.sh`.
+
+**Vérification Release.** Le code réservé aux tests UI et aux previews (store fichier dédié
+`-uiTestingPersistentStore` / `-resetUITestStore`, `UITestSeed`, `previewEnvironment`, échec d'écriture simulé)
+est sous `#if DEBUG` : en Release, `PersistenceController.storage(for:)` renvoie toujours le stockage
+d'application et aucun argument de lancement ne peut le détourner. `check-release-symbols.sh` échoue si `nm -a`
+ou `strings -a` de l'exécutable ou des dylibs de premier niveau trouve un de ces identifiants ;
+`InMemoryGameRepository` est également bloquant (type entièrement sous `#if DEBUG`). La logique des scripts est
+testée hors macOS par `scripts/ci/test-checks.sh` (outils `NM`/`STRINGS`/`OTOOL` factices). Ces contrôles
+binaires ne sont exécutés que par la CI macOS (non vérifiés localement sans Xcode).
 
 Les modifications purement documentaires (`*.md`, `.claude/**`) ne déclenchent pas la CI.
 

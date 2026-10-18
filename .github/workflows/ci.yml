@@ -148,6 +148,16 @@ jobs:
           xcrun simctl list devices available | grep "$udid"
           echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
 
+      - name: Clavier logiciel du simulateur (clavier matériel déconnecté)
+        # Comme sur un iPhone : le focus d'un champ affiche le clavier logiciel et sa barre
+        # (« Suivant », « OK »), mise en page attendue par les tests UI. Préférence de
+        # Simulator lue au démarrage : à écrire AVANT le boot. Sans effet si le simulateur
+        # tourne sans Simulator.app (aucun clavier matériel n'est alors relié).
+        run: |
+          set -euo pipefail
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          defaults read com.apple.iphonesimulator ConnectHardwareKeyboard
+
       - name: Démarrage du simulateur
         run: xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
@@ -177,6 +187,25 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Build Release (sans signature)
+        # Après les tests, dans le même runner macOS (pas de job supplémentaire).
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedDataRelease" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Inspection binaire Release zéro réseau (otool / nm)
+        run: bash scripts/ci/check-binary.sh "$RUNNER_TEMP/DerivedDataRelease"
+
+      - name: Aucun code de test ou de preview dans le binaire Release
+        run: bash scripts/ci/check-release-symbols.sh "$RUNNER_TEMP/DerivedDataRelease"
 
       - name: Conservation du résultat de tests en cas d'échec
         if: failure()
