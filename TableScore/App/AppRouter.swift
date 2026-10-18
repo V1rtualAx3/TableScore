@@ -32,7 +32,9 @@ enum AppSheet: Hashable, Sendable, Identifiable {
 /// - feuille : `router.present(.roundEntry(gameID:mode:))`, fermeture par `router.dismissSheet()`
 ///   ou `dismiss()` (équivalents : la feuille est liée à `sheet`) ;
 /// - après **toute écriture réussie** dans le dépôt : `router.notifyDataChanged()` ; les écrans
-///   qui affichent des données du dépôt se rechargent sur `.task(id: router.dataRevision)`.
+///   qui affichent des données du dépôt se rechargent sur `.task(id: router.dataRevision)`
+///   (écrans globaux : accueil, parties terminées) ou sur `.task(id: router.reloadKey(for: gameID))`
+///   (écrans d'une partie : partie en cours, historique).
 /// - Aucune restauration automatique du chemin après relance (évite un état fantôme).
 @Observable
 @MainActor

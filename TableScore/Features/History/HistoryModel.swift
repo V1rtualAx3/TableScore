@@ -28,6 +28,11 @@ final class HistoryModel {
         let totalAfterRound: Int?
         let isClosing: Bool
         let isDoubled: Bool
+        /// Grille enregistrée si le score a été saisi en mode « Cartes » (consultation en lecture
+        /// seule) ; `nil` pour une saisie en points.
+        var cardGrid: CardGrid? = nil
+
+        var isCardsEntry: Bool { cardGrid != nil }
     }
 
     /// Une manche de l'historique, prête à afficher.
@@ -52,6 +57,12 @@ final class HistoryModel {
         let accessibilityLabel: String
 
         var displayedCloserNote: String { VerdictText.sentenceCase(closerNote) }
+
+        /// Joueurs saisis en mode « Cartes » (ordre d'affichage).
+        var cardPlayers: [PlayerLine] { players.filter(\.isCardsEntry) }
+        var hasCardEntries: Bool { players.contains(where: \.isCardsEntry) }
+        /// Bouton de consultation des grilles : « Voir les cartes de la manche 3 ».
+        var cardsButtonTitle: String { "Voir les cartes de la manche \(index)" }
     }
 
     /// Suppression annulable : la manche exacte (même identifiant) et l'état attendu pour l'annuler.
@@ -158,7 +169,7 @@ final class HistoryModel {
 
     // MARK: Chargement
 
-    /// Relit la partie (appelé sur `.task(id: router.dataRevision)`). Synchrone : volume minuscule.
+    /// Relit la partie (appelé sur `.task(id: router.reloadKey(for: gameID))`). Synchrone : volume minuscule.
     func load() {
         defer { hasLoaded = true }
         let game: SavedGame
@@ -313,10 +324,13 @@ final class HistoryModel {
             endingIndex = nil
         }
         let lastRoundID = game.computation.rounds.last?.scoring.roundID
+        // Saisies d'origine (mode et grille) : seulement pour l'affichage, jamais recalculées ici.
+        let inputs = Dictionary(game.rounds.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         let rows = game.computation.rounds.map { summary -> RoundRow in
             let scoring = summary.scoring
             let isDoubled = scoring.verdict.isDoubled
+            let input = inputs[scoring.roundID]
             let players = scoring.scores.map { score in
                 PlayerLine(
                     participantID: score.participantID,
@@ -326,7 +340,8 @@ final class HistoryModel {
                     effectiveScore: score.effectiveScore,
                     totalAfterRound: summary.totalsAfterRound[score.participantID],
                     isClosing: score.isClosing,
-                    isDoubled: score.isClosing && isDoubled
+                    isDoubled: score.isClosing && isDoubled,
+                    cardGrid: input?.entry(for: score.participantID)?.cardGrid
                 )
             }
             let closerName = names[scoring.closingParticipantID] ?? "Joueur"
@@ -373,13 +388,16 @@ final class HistoryModel {
         if isAfterGameEnd { sentences.append("Jouée après la fin de la partie") }
         for player in players {
             let total = player.totalAfterRound.map { ScoreFormat.spoken($0) } ?? "inconnu"
+            let method = player.isCardsEntry ? ", saisi en cartes" : ""
             if player.isDoubled {
                 sentences.append(
                     "\(player.name) \(ScoreFormat.spoken(player.rawScore)) doublé à "
-                        + "\(ScoreFormat.spoken(player.effectiveScore)), total \(total)"
+                        + "\(ScoreFormat.spoken(player.effectiveScore))\(method), total \(total)"
                 )
             } else {
-                sentences.append("\(player.name) \(ScoreFormat.spoken(player.effectiveScore)), total \(total)")
+                sentences.append(
+                    "\(player.name) \(ScoreFormat.spoken(player.effectiveScore))\(method), total \(total)"
+                )
             }
         }
         return sentences.joined(separator: ". ") + "."

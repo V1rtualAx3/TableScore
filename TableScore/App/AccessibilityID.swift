@@ -61,6 +61,11 @@ enum AccessibilityID {
         /// Barre du clavier : « Suivant » et « OK » (fermeture du clavier).
         static let keyboardNext = "round.keyboardNext"
         static let keyboardDone = "round.keyboardDone"
+        // Lot 3 (saisie par cartes)
+        /// Sélecteur « Points | Cartes » du joueur (contrôle segmenté).
+        static func inputMethod(position: Int) -> String { "round.inputMethod.\(position)" }
+        /// Information après une bascule cartes → points (grille incomplète, score manuel conservé).
+        static func cardsNotice(position: Int) -> String { "round.cardsNotice.\(position)" }
     }
 
     enum GameOver {
@@ -77,6 +82,9 @@ enum AccessibilityID {
         // Complément T0
         static let deleteLastRound = "history.deleteLastRound"
         static let undoDeletion = "history.undoDeletion"
+        // Lot 3 (saisie par cartes)
+        /// Ligne « Voir les cartes de la manche n » (consultation des grilles en lecture seule).
+        static func viewCards(index: Int) -> String { "history.viewCards.\(index)" }
     }
 
     // Complément T0
@@ -93,5 +101,24 @@ enum AccessibilityID {
     // Complément T0
     enum StorageError {
         static let retry = "storageError.retry"
+    }
+
+    /// Lot 3 — saisie par cartes. `position` : rang 0-based du participant ; `column` et `row`
+    /// sont **0-based** comme `CardGrid` (`row: 0` = rangée du haut) ; `value` : −2…12
+    /// (« cards.valuePicker.-2 »).
+    enum Cards {
+        static func cell(position: Int, column: Int, row: Int) -> String {
+            "cards.cell.\(position).\(column).\(row)"
+        }
+        static func removeColumn(position: Int, column: Int) -> String {
+            "cards.removeColumn.\(position).\(column)"
+        }
+        static func total(position: Int) -> String { "cards.total.\(position)" }
+        static func valuePicker(value: Int) -> String { "cards.valuePicker.\(value)" }
+        /// Sélecteur de valeur : « Effacer » (case vide) et « OK » (fermeture).
+        static let valuePickerClear = "cards.valuePicker.clear"
+        static let valuePickerDone = "cards.valuePicker.done"
+        /// Sélecteur de valeur : « Colonne N retirée » (colonne de la case courante).
+        static let valuePickerRemoveColumn = "cards.valuePicker.removeColumn"
     }
 }

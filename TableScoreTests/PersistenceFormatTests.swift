@@ -22,6 +22,10 @@ struct PersistenceFormatTests {
     /// Colonne 7/7/7 (triplet), 1/2/3, colonne marquée retirée, 12/−2/0 ⇒ 16.
     static let cardEntriesJSON = #"{"content":[{"grid":{"columns":[{"bottom":7,"middle":7,"removed":false,"top":7},{"bottom":3,"middle":2,"removed":false,"top":1},{"removed":true},{"bottom":0,"middle":-2,"removed":false,"top":12}]},"method":"cards","participantID":"7A5C0000-0000-0000-0000-000000000001","rawScore":16},{"method":"points","participantID":"7A5C0000-0000-0000-0000-000000000002","rawScore":20}],"formatVersion":1}"#
 
+    /// Lot 3 : triplet négatif −2/−2/−2, colonne marquée retirée dont les valeurs saisies (5/5/vide)
+    /// restent mémorisées (annulation du retrait), 1/2/3, 12/0/−1 ⇒ 0 + 0 + 6 + 11 = 17.
+    static let negativeTripletAndRemovedColumnJSON = #"{"content":[{"grid":{"columns":[{"bottom":-2,"middle":-2,"removed":false,"top":-2},{"middle":5,"removed":true,"top":5},{"bottom":3,"middle":2,"removed":false,"top":1},{"bottom":-1,"middle":0,"removed":false,"top":12}]},"method":"cards","participantID":"7A5C0000-0000-0000-0000-000000000001","rawScore":17},{"method":"points","participantID":"7A5C0000-0000-0000-0000-000000000002","rawScore":20}],"formatVersion":1}"#
+
     static let classicRulesJSON = #"{"content":{"edition":"classic","targetScore":100},"formatVersion":1}"#
 
     static let houseRulesJSON = #"{"content":{"closerPenaltyDisabled":true,"edition":"classic","targetScore":150},"formatVersion":1}"#
@@ -74,6 +78,28 @@ struct PersistenceFormatTests {
         #expect(decoded == round.entries)
         #expect(decoded.first?.cardGrid?.columns[2].isMarkedRemoved == true)
         #expect(decoded.first?.rawScore == 16)
+    }
+
+    @Test("Entrées « cartes » (triplet négatif, colonne retirée avec valeurs conservées) : encodage exact et décodage")
+    func cardEntriesWithNegativeTripletAndRemovedValues() throws {
+        let grid = try CardGrid(columns: [
+            CardColumn(top: -2, middle: -2, bottom: -2),
+            CardColumn(top: 5, middle: 5, bottom: nil, isMarkedRemoved: true),
+            CardColumn(top: 1, middle: 2, bottom: 3),
+            CardColumn(top: 12, middle: 0, bottom: -1),
+        ])
+        let round = RoundInput(
+            id: Fx.uuid(0x53),
+            index: 1,
+            closingParticipantID: Fx.bob,
+            entries: [try RoundEntry.cards(Fx.alice, grid: grid), .points(Fx.bob, rawScore: 20)]
+        )
+        #expect(text(try RecordMapper.entriesPayload(of: round)) == Self.negativeTripletAndRemovedColumnJSON)
+        let decoded = try RecordMapper.decodeEntries(Data(Self.negativeTripletAndRemovedColumnJSON.utf8), roundID: round.id)
+        #expect(decoded == round.entries)
+        #expect(decoded.first?.rawScore == 17)
+        #expect(decoded.first?.cardGrid?.columns[1].values == [5, 5, nil])
+        #expect(decoded.first?.cardGrid?.evaluate().columns[0] == .identicalCards(value: -2))
     }
 
     // MARK: Règles

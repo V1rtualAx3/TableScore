@@ -30,6 +30,18 @@ struct AppShellTests {
         #expect(AccessibilityID.GameOver.replay == "gameOver.replay")
         #expect(AccessibilityID.History.round(index: 3) == "history.round.3")
         #expect(AccessibilityID.StorageError.retry == "storageError.retry")
+        // Lot 3 (saisie par cartes)
+        #expect(AccessibilityID.Round.inputMethod(position: 2) == "round.inputMethod.2")
+        #expect(AccessibilityID.Round.cardsNotice(position: 2) == "round.cardsNotice.2")
+        #expect(AccessibilityID.History.viewCards(index: 3) == "history.viewCards.3")
+        #expect(AccessibilityID.Cards.cell(position: 1, column: 3, row: 2) == "cards.cell.1.3.2")
+        #expect(AccessibilityID.Cards.removeColumn(position: 1, column: 3) == "cards.removeColumn.1.3")
+        #expect(AccessibilityID.Cards.total(position: 1) == "cards.total.1")
+        #expect(AccessibilityID.Cards.valuePicker(value: -2) == "cards.valuePicker.-2")
+        #expect(AccessibilityID.Cards.valuePicker(value: 12) == "cards.valuePicker.12")
+        #expect(AccessibilityID.Cards.valuePickerClear == "cards.valuePicker.clear")
+        #expect(AccessibilityID.Cards.valuePickerDone == "cards.valuePicker.done")
+        #expect(AccessibilityID.Cards.valuePickerRemoveColumn == "cards.valuePicker.removeColumn")
     }
 
     // MARK: Navigation
@@ -143,6 +155,20 @@ struct AppShellTests {
         #expect(finished.lifecycle == .finished)
         let interrupted = try repository.game(id: Key.historyInterrupted.id)
         #expect(interrupted.isInterrupted)
+    }
+
+    @Test("withCards : partie en cours, Alice saisie en cartes (total de la grille = 6)")
+    func withCardsSeed() throws {
+        let game = try #require(try seeded(.withCards).activeGame())
+        #expect(game.id == UITestSeed.withCards.activeGameID)
+        #expect(game.rounds.count == 1)
+        #expect(totals(game, .cards) == [6, 20, 4])
+        #expect(game.computation.status == .inProgress)
+        let round = try #require(game.rounds.first)
+        let methods = (0..<3).map { round.entry(for: Key.cards.participantID(position: $0))?.inputMethod }
+        #expect(methods == [.cards, .points, .points])
+        #expect(round.entry(for: Key.cards.participantID(position: 0))?.cardGrid?.evaluate().rawScore == 6)
+        #expect(game.computation.rounds[0].scoring.verdict.isDoubled)
     }
 
     @Test("Argument -seed : absent, connu, inconnu")

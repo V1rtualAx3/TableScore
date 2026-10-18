@@ -292,6 +292,51 @@ struct PersistenceContractTests {
         #expect(try repo.game(id: Fx.gameA) == game)
     }
 
+    @Test("Cartes : triplet négatif et colonne retirée relus à l'identique, puis correction de la grille", arguments: RepositoryKind.allCases)
+    func cardGridRoundTripAndCorrection(kind: RepositoryKind) throws {
+        let repo = try kind.make(clock: TestClock())
+        _ = try repo.createGame(id: Fx.gameA, participants: Fx.players(2), rules: .classic)
+        // −2/−2/−2 (non comptée), colonne retirée (valeurs 5/5/vide conservées), 1/2/3, 12/0/−1 ⇒ 17.
+        let grid = try CardGrid(columns: [
+            CardColumn(top: -2, middle: -2, bottom: -2),
+            CardColumn(top: 5, middle: 5, bottom: nil, isMarkedRemoved: true),
+            CardColumn(top: 1, middle: 2, bottom: 3),
+            CardColumn(top: 12, middle: 0, bottom: -1),
+        ])
+        let roundID = UUID()
+        let round = RoundInput(
+            id: roundID,
+            index: 1,
+            closingParticipantID: Fx.bob,
+            entries: [try RoundEntry.cards(Fx.alice, grid: grid), .points(Fx.bob, rawScore: 20)]
+        )
+        let saved = try repo.appendRound(round, toGame: Fx.gameA).game
+        let reread = try repo.game(id: Fx.gameA)
+        #expect(reread == saved)
+        let entry = try #require(reread.rounds.first?.entry(for: Fx.alice))
+        #expect(entry.inputMethod == .cards)
+        #expect(entry.cardGrid == grid)
+        #expect(entry.cardGrid?.columns[1].values == [5, 5, nil])
+        #expect(entry.rawScore == 17)
+        // Bob clôt à 20, Alice a fait moins (17) ⇒ doublé.
+        #expect(reread.computation.totals == [Fx.alice: 17, Fx.bob: 40])
+
+        // Correction de la grille (12/0/−1 → 12/0/4 ⇒ 22) : relue à l'identique, cumuls recalculés.
+        var corrected = grid
+        try corrected.setCard(4, column: 3, row: 2)
+        let correction = RoundInput(
+            id: roundID,
+            index: 1,
+            closingParticipantID: Fx.bob,
+            entries: [try RoundEntry.cards(Fx.alice, grid: corrected), .points(Fx.bob, rawScore: 20)]
+        )
+        _ = try repo.replaceRound(correction, inGame: Fx.gameA)
+        let afterCorrection = try repo.game(id: Fx.gameA)
+        #expect(afterCorrection.rounds.first?.entry(for: Fx.alice)?.cardGrid == corrected)
+        #expect(afterCorrection.rounds.first?.entry(for: Fx.alice)?.rawScore == 22)
+        #expect(afterCorrection.computation.totals == [Fx.alice: 22, Fx.bob: 20])
+    }
+
     @Test("Correction d'une ancienne manche : recalcul de toutes les suivantes", arguments: RepositoryKind.allCases)
     func correctionRecomputesFollowingRounds(kind: RepositoryKind) throws {
         let repo = try kind.make(clock: TestClock())

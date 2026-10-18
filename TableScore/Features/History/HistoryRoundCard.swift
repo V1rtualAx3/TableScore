@@ -149,15 +149,24 @@ struct HistoryRoundCard: View {
         }
     }
 
+    /// Prénom (+ drapeau du clôturant) ; « (cartes) » dessous pour un score saisi par grille
+    /// (sous le nom plutôt qu'à côté : la colonne des noms reste lisible sur petit écran).
     private func playerName(_ player: HistoryModel.PlayerLine) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
-            if player.isClosing {
-                Image(systemName: Theme.Symbol.closer)
-                    .font(.footnote)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
+                if player.isClosing {
+                    Image(systemName: Theme.Symbol.closer)
+                        .font(.footnote)
+                }
+                Text(verbatim: player.name)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .fontWeight(player.isClosing ? .semibold : .regular)
             }
-            Text(verbatim: player.name)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                .fontWeight(player.isClosing ? .semibold : .regular)
+            if player.isCardsEntry {
+                Text("(cartes)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

@@ -42,9 +42,14 @@ private struct HistoryContent: View {
     @Environment(AppRouter.self) private var router
     @State private var isConfirmingDeletion = false
     @State private var confirmingNotice: HistoryModel.InconsistencyNotice?
+    /// Manche dont les grilles de cartes sont consultées (lecture seule).
+    @State private var cardsRow: HistoryModel.RoundRow?
 
     var body: some View {
         content
+            .sheet(item: $cardsRow) { row in
+                HistoryCardsSheet(row: row)
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let deletion = model.undoableDeletion {
                     UndoDeletionBanner(text: deletion.bannerText) {
@@ -123,6 +128,9 @@ private struct HistoryContent: View {
             Section {
                 ForEach(model.rows) { row in
                     roundRow(row)
+                    if row.hasCardEntries {
+                        cardsButton(row)
+                    }
                     // Juste sous la manche concernée (la plus récente, en haut de liste).
                     if row.isLast && model.canDeleteLastRound {
                         deleteLastRoundButton
@@ -135,6 +143,23 @@ private struct HistoryContent: View {
             }
         }
         .listStyle(.insetGrouped)
+    }
+
+    /// Consultation des grilles d'une manche saisie (en partie) en mode « Cartes » : feuille en
+    /// lecture seule, disponible aussi pour une partie interrompue. Ligne distincte de la manche
+    /// (qui, elle, ouvre la correction).
+    private func cardsButton(_ row: HistoryModel.RoundRow) -> some View {
+        Button {
+            cardsRow = row
+        } label: {
+            Label {
+                Text(verbatim: row.cardsButtonTitle)
+            } icon: {
+                Image(systemName: "square.grid.3x3")
+            }
+        }
+        .accessibilityHint(Text("Affiche les grilles en lecture seule."))
+        .accessibilityIdentifier(AccessibilityID.History.viewCards(index: row.index))
     }
 
     private var deleteLastRoundButton: some View {
@@ -342,6 +367,13 @@ private struct UndoDeletionBanner: View {
     }
     .previewEnvironment(.eightPlayers)
     .dynamicTypeSize(.accessibility3)
+}
+
+#Preview("Manche saisie en cartes") {
+    NavigationStack {
+        HistoryView(gameID: UITestSeed.withCards.activeGameID)
+    }
+    .previewEnvironment(.withCards)
 }
 
 #Preview("Partie introuvable") {

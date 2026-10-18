@@ -25,6 +25,10 @@ enum UITestSeed: String, CaseIterable, Sendable {
     /// zéro, négatif ; totaux Alice 41, Bob 60, Chloé 34, Dimitri 53) + une partie terminée
     /// (Bob gagne, 2 manches) + une partie interrompue (archivée, 1 manche).
     case withHistory
+    /// Lot 3 : 3 joueurs, partie active, 1 manche où Alice est saisie **en cartes** — colonnes
+    /// 7/7/7 (non comptée), 1/2/3, colonne retirée, −2/−2/−2 (non comptée) ⇒ 6 ; Bob 10
+    /// (clôturant, doublé à 20 : Alice et Chloé ont fait moins), Chloé 4. Totaux 6, 20, 4.
+    case withCards
 
     static let launchArgument = "-seed"
 
@@ -35,6 +39,7 @@ enum UITestSeed: String, CaseIterable, Sendable {
         case .nearEnd: GameKey.nearEnd.id
         case .tieEnd: GameKey.tieEnd.id
         case .withHistory: GameKey.historyActive.id
+        case .withCards: GameKey.cards.id
         }
     }
 
@@ -46,6 +51,7 @@ enum UITestSeed: String, CaseIterable, Sendable {
         case historyFinished
         case historyInterrupted
         case historyActive
+        case cards
 
         var id: UUID { UITestSeed.fixtureID(kind: 0x01, key: rawValue, item: 0) }
 
@@ -151,13 +157,31 @@ enum UITestSeed: String, CaseIterable, Sendable {
                 ],
                 into: repository
             )
+        case .withCards:
+            let aliceGrid: CardGrid
+            do {
+                aliceGrid = try CardGrid(
+                    rows: [[7, 1, nil, -2], [7, 2, nil, -2], [7, 3, nil, -2]],
+                    removedColumns: [2]
+                )
+            } catch {
+                throw GameRepositoryError.storageFailure(.setup, message: "Jeu de données de test incohérent.")
+            }
+            try Self.insert(
+                .cards,
+                names: ["Alice", "Bob", "Chloé"],
+                rounds: [SeedRound(closer: 1, scores: [6, 10, 4], grids: [0: aliceGrid])],
+                into: repository
+            )
         }
     }
 
-    /// Manche saisie en points : position du clôturant + scores bruts dans l'ordre d'affichage.
+    /// Manche : position du clôturant + scores bruts dans l'ordre d'affichage ; `grids` : joueurs
+    /// saisis en cartes (position → grille), dont le total doit valoir le score indiqué.
     private struct SeedRound {
         let closer: Int
         let scores: [Int]
+        var grids: [Int: CardGrid] = [:]
     }
 
     @MainActor
@@ -177,8 +201,18 @@ enum UITestSeed: String, CaseIterable, Sendable {
                 throw GameRepositoryError.storageFailure(.setup, message: "Jeu de données de test incohérent.")
             }
             let index = RoundInput.firstIndex + offset
-            let entries = zip(participants, round.scores).map { participant, score in
-                RoundEntry.points(participant.id, rawScore: score)
+            var entries: [RoundEntry] = []
+            for (position, participant) in participants.enumerated() {
+                let score = round.scores[position]
+                guard let grid = round.grids[position] else {
+                    entries.append(.points(participant.id, rawScore: score))
+                    continue
+                }
+                // Total calculé par le Kit ; il doit correspondre au score documenté.
+                guard let entry = try? RoundEntry.cards(participant.id, grid: grid), entry.rawScore == score else {
+                    throw GameRepositoryError.storageFailure(.setup, message: "Jeu de données de test incohérent.")
+                }
+                entries.append(entry)
             }
             let input = RoundInput(
                 id: key.roundID(index: index),
