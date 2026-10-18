@@ -268,19 +268,21 @@ struct FormDriver {
 /// Apparence imposée au **lancement** de l'app (et non au simulateur entier : aucun état résiduel
 /// d'un test à l'autre).
 ///
-/// Sombre : argument `-AppleInterfaceStyle Dark` (domaine d'arguments de `UserDefaults`, lu par
-/// UIKit/SwiftUI pour le style d'interface). `XCUIDevice.shared.appearance` n'est volontairement pas
-/// utilisé : sa disponibilité dans le SDK de la CI n'est pas vérifiable sans Xcode, et il modifie le
-/// simulateur pour les tests suivants. `ScreenTour` vérifie la luminosité réelle de la première
-/// capture : un thème non appliqué fait **échouer** le test au lieu de produire de fausses captures.
+/// Argument DEBUG de l'app `-uiTestingAppearance dark|light` (exige `-uiTesting`, voir
+/// `UITestAppearanceOverride` dans `TableScoreApp.swift`) : force `preferredColorScheme` à la racine
+/// et `overrideUserInterfaceStyle` sur les fenêtres. `-AppleInterfaceStyle Dark` est sans effet sur
+/// iOS et `XCUIDevice.shared.appearance` n'est volontairement pas utilisé (disponibilité non
+/// vérifiable dans le SDK de la CI, et état du simulateur modifié pour les tests suivants).
+/// `ScreenTour` vérifie en plus la luminosité réelle de la première capture : un thème non appliqué
+/// fait **échouer** le test au lieu de produire de fausses captures.
 enum UITestAppearance: CaseIterable, Sendable {
     case light
     case dark
 
     var launchArguments: [String] {
         switch self {
-        case .light: []
-        case .dark: ["-AppleInterfaceStyle", "Dark"]
+        case .light: ["-uiTestingAppearance", "light"]
+        case .dark: ["-uiTestingAppearance", "dark"]
         }
     }
 
@@ -307,7 +309,7 @@ enum UITestTextSize {
 /// À chaque écran atteint, `onScreen` reçoit son nom (« 08-saisie-manche-penalite-sombre ») ; le
 /// parcours n'impose aucune assertion sur le contenu, mais **échoue** (`TourError`) dès qu'un écran
 /// ou un contrôle attendu n'apparaît pas. Les données viennent de `UITestSeed` : le stockage est en
-/// mémoire, chaque jeu de données impose donc un nouveau lancement (6 lancements par parcours complet).
+/// mémoire, chaque jeu de données impose donc un nouveau lancement (7 lancements par parcours complet).
 @MainActor
 final class ScreenTour {
     struct TourError: Error, CustomStringConvertible {
@@ -342,9 +344,9 @@ final class ScreenTour {
 
     // MARK: Parcours
 
-    /// 14 écrans, 6 lancements : accueil vide, création, règles, paramètres ; accueil avec reprise,
+    /// 15 écrans, 7 lancements : accueil vide, création, règles, paramètres ; accueil avec reprise,
     /// tableau 8 joueurs (haut puis bas) ; saisie avec aperçu de pénalité ; historique, parties
-    /// terminées ; fin de partie à co-vainqueurs ; consultation des cartes, saisie par cartes, sélecteur.
+    /// terminées ; fin de partie à co-vainqueurs ; consultation des cartes, saisie par cartes, sélecteur ; vérification du scan.
     func runFullTour() throws {
         // Lancement 1 : stockage vide.
         launch(nil)
@@ -424,6 +426,18 @@ final class ScreenTour {
         roundForm.tap(app.buttons["cards.cell.0.0.0"])
         try require(app.buttons["cards.valuePicker.0"], "sélecteur de valeur des cartes")
         stop(14, "selecteur-valeur-cartes")
+
+        // Lancement 7 : vérification d'un scan simulé (8 cartes lues, 1 case à vérifier). Le résultat
+        // de lecture vient de `-scanFixture partial` (builds Debug, sans caméra ni autorisation).
+        launch(.nearEnd, additionalArguments: ["-scanFixture", "partial"])
+        try openRoundEntry()
+        let cardsSegment = app.segmentedControls["round.inputMethod.0"].buttons["Cartes"]
+        try require(cardsSegment, "segment « Cartes » du joueur 1")
+        roundForm.tap(cardsSegment)
+        try require(app.buttons["scan.start.0"], "bouton « Scanner les cartes » (fixture de scan)")
+        roundForm.tap(app.buttons["scan.start.0"])
+        try require(element("scan.review.summary"), "écran de vérification du scan")
+        stop(15, "verification-scan")
     }
 
     /// Passe Dynamic Type (à lancer avec `UITestTextSize.accessibilityXXXL`) : création, tableau
@@ -453,11 +467,14 @@ final class ScreenTour {
     }
 
     /// Relance l'app (terminée si besoin) avec l'apparence, la taille de texte et le jeu de données.
-    private func launch(_ seed: SeedScenario?) {
+    private func launch(_ seed: SeedScenario?, additionalArguments: [String] = []) {
         if app.state != .notRunning {
             app.terminate()
         }
-        app.launch(seed: seed, extraArguments: appearance.launchArguments + extraArguments)
+        app.launch(
+            seed: seed,
+            extraArguments: appearance.launchArguments + extraArguments + additionalArguments
+        )
     }
 
     @discardableResult
@@ -535,7 +552,7 @@ final class ScreenTour {
         case .dark:
             XCTAssertLessThan(
                 luminance, 0.45,
-                "Thème sombre non appliqué (luminance moyenne \(luminance)) ; vérifier -AppleInterfaceStyle Dark."
+                "Thème sombre non appliqué (luminance moyenne \(luminance)) ; vérifier -uiTestingAppearance."
             )
         case .light:
             XCTAssertGreaterThan(
