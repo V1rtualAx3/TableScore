@@ -52,7 +52,7 @@ struct CardScanReviewView: View {
                 )
                 Text(verbatim: CardScanSummary.reviewReminder)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(Theme.Spacing.l)
@@ -142,7 +142,7 @@ private struct CardScanNotes: View {
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: note.kind == .warning ? Theme.Symbol.warning : "info.circle")
-                        .foregroundStyle(note.kind == .warning ? Theme.Palette.warning : Color.secondary)
+                        .foregroundStyle(note.kind == .warning ? Theme.Palette.warning : Theme.Palette.secondaryText)
                 }
                 .font(Theme.Typography.detail)
                 .accessibilityElement(children: .combine)

@@ -92,8 +92,8 @@ TableScoreApp
 - Toolbar : titre « Manche 4 » (= manches jouées + 1), sous-titre « 4 joueurs » ; `Menu` (`ellipsis.circle`, label
   « Options de la partie ») : Historique, Règles de comptage, Abandonner la partie.
 - Corps : `ScrollView` + `LazyVStack` de `PlayerScoreRow` **dans l'ordre de `displayOrder`** (jamais retrié) :
-  nom (`.title3`, `lineLimit(2)`), rang « 1er », total (`.system(.largeTitle, design: .rounded).monospacedDigit()`),
-  badge « En tête » (`crown.fill` + texte) pour **tous** les leaders ; écart « +12 » vs leader en `.secondary`.
+  nom (`.title3`, `lineLimit(2)`), rang « 1er », total (`.largeTitle.monospacedDigit()` bold),
+  badge « En tête » (`crown.fill` + texte) pour **tous** les leaders ; écart « +12 » vs leader en `Theme.Palette.secondaryText`.
 - Section repliée « Classement » triée (optionnelle, `DisclosureGroup`) ; section « Manches » : lien « Historique (3 manches) ».
 - Bannière post-enregistrement (`RoundBanner`, 4 s, non bloquante, rejouable via Historique) : « Manche 3 enregistrée » +
   pour le clôturant doublé « Alice : score doublé (10 → 20) ». Annonce VoiceOver via `AccessibilityNotification.Announcement`.
@@ -222,16 +222,20 @@ pour les deltas ; VoiceOver lit « moins » (vérifier en test, sinon fournir `a
 
 | Token | Valeur | Toujours doublé par |
 |---|---|---|
-| `accent` | `AccentColor` (asset clair/sombre, bleu-vert calme, contraste ≥ 4.5:1 sur fond) | libellé du bouton |
-| `leader` | `.green` système | « En tête » + `crown.fill` |
-| `doubled` | `.orange` système | « ×2 Doublé » + `multiply.circle.fill` |
-| `warning` | `.yellow`/`.orange` adaptatif | texte + `exclamationmark.triangle.fill` |
+| `accent` | `AccentColor` : clair `#1A626A`, sombre `#58BEC9` (texte ≥ 4,8:1 sur tous les fonds) | libellé du bouton |
+| `onAccent` | blanc (clair, 7,0:1) / noir (sombre, ≈ 9,6:1) : libellé des boutons proéminents | — |
+| `secondaryText` | `#5C5C61` / `#AEAEB2` (contraste accru : `#3A3A3C` / `#D1D1D6`), ≥ 4,8:1 | — |
+| `leader` | vert `#18692C` / `#30D158` | « En tête » + `crown.fill` |
+| `doubled`, `warning` | orange `#9C4500` / `#FF9F0A` | « ×2 Doublé » + `multiply.circle.fill` ; texte + `exclamationmark.triangle.fill` |
+| `destructive` | rouge `#B3261E` / `#FF6961` (actions destructives affichées dans l'écran) | texte explicite |
 | Fond | `Color(.systemGroupedBackground)` ; surfaces `secondarySystemGroupedBackground` | — |
 
-- Couleurs système uniquement (adaptent clair/sombre/contraste accru) ; pas de dégradé, pas d'ombres, matériaux
-  seulement sous le CTA fixe.
-- Typo : totaux `.largeTitle` rounded `.monospacedDigit()` bold ; scores de saisie `.title2.monospacedDigit()` ; noms
-  `.title3` ; détails `.subheadline` `.secondary`. Uniquement des styles Dynamic Type (pas de tailles fixes).
+- Contraste ≥ 4,5:1 pour tout texte, clair et sombre (audit `performAccessibilityAudit`) : les couleurs système
+  `.secondary`, `.tertiary`, `.orange`, `.green`, `.red` ne servent jamais de couleur de texte (≈ 2–3,4:1 en clair) ;
+  en-têtes et pieds de sections et textes d'attente des champs reçoivent `secondaryText`. Pas de dégradé, pas
+  d'ombres, matériaux seulement sous le CTA fixe.
+- Typo : totaux `.largeTitle` `.monospacedDigit()` bold ; scores de saisie `.title2.monospacedDigit()` ; noms
+  `.title3` ; détails `.subheadline` `secondaryText`. Uniquement des styles Dynamic Type (pas de tailles fixes).
 - Espacements : constantes `4, 8, 12, 16, 24` ; rayons `12` (lignes), `16` (cartes). Cible tactile ≥ 44 pt.
 - Haptique : `.sensoryFeedback(.success, trigger:)` à l'enregistrement et à la fin de partie ; `.selection` au choix
   du clôturant ; `.warning` sur incohérence. Respect du réglage « Retours haptiques ». Rien d'autre.

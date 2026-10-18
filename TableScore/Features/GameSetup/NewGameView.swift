@@ -46,7 +46,7 @@ private struct NewGameContent: View {
                 if let reason = model.startBlockReason {
                     Text(reason)
                         .font(Theme.Typography.detail)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
                         .accessibilityIdentifier(AccessibilityID.Setup.startBlockReason)
@@ -96,12 +96,16 @@ private struct NewGameContent: View {
             .accessibilityIdentifier(AccessibilityID.Setup.addPlayer)
         } header: {
             Text("Joueurs")
+                .foregroundStyle(Theme.Palette.secondaryText)
         } footer: {
-            if !model.canAddPlayer {
-                Text("\(NewGameModel.playerRange.upperBound) joueurs maximum")
-            } else {
-                Text("De \(NewGameModel.playerRange.lowerBound) à \(NewGameModel.playerRange.upperBound) joueurs. Les lignes vides sont ignorées.")
+            Group {
+                if !model.canAddPlayer {
+                    Text("\(NewGameModel.playerRange.upperBound) joueurs maximum")
+                } else {
+                    Text("De \(NewGameModel.playerRange.lowerBound) à \(NewGameModel.playerRange.upperBound) joueurs. Les lignes vides sont ignorées.")
+                }
             }
+            .foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 
@@ -110,21 +114,28 @@ private struct NewGameContent: View {
         let number = model.number(of: id)
         let issue = model.issues[id]
         return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            TextField("Prénom du joueur \(number)", text: player.name)
-                .focused($focusedID, equals: id)
-                .textInputAutocapitalization(.words)
-                .autocorrectionDisabled()
-                .submitLabel(model.shouldFinishOnSubmit(id) ? .done : .next)
-                .onSubmit { focusedID = model.submit(from: id) }
-                .accessibilityLabel("Prénom du joueur \(number)")
-                .accessibilityIdentifier(AccessibilityID.Setup.player(number: number))
+            // Texte d'attente en couleur secondaire contrastée (celle du système, ≈ 2:1, est signalée
+            // par l'audit de contraste).
+            TextField(
+                text: player.name,
+                prompt: Text("Prénom du joueur \(number)").foregroundStyle(Theme.Palette.secondaryText)
+            ) {
+                Text("Prénom du joueur \(number)")
+            }
+            .focused($focusedID, equals: id)
+            .textInputAutocapitalization(.words)
+            .autocorrectionDisabled()
+            .submitLabel(model.shouldFinishOnSubmit(id) ? .done : .next)
+            .onSubmit { focusedID = model.submit(from: id) }
+            .accessibilityLabel("Prénom du joueur \(number)")
+            .accessibilityIdentifier(AccessibilityID.Setup.player(number: number))
             if let issue {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
                     Image(systemName: Theme.Symbol.warning)
                         .foregroundStyle(Theme.Palette.warning)
                         .accessibilityHidden(true)
                     Text(issue.message)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                 }
                 .font(Theme.Typography.detail)
             }
@@ -138,7 +149,7 @@ private struct NewGameContent: View {
     private var suggestionsSection: some View {
         let suggestions = model.suggestions
         if !suggestions.isEmpty, model.canApplySuggestion {
-            Section("Prénoms récents") {
+            Section {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Theme.Spacing.s) {
                         ForEach(suggestions, id: \.self) { name in
@@ -155,6 +166,9 @@ private struct NewGameContent: View {
                     }
                     .padding(.vertical, Theme.Spacing.xs)
                 }
+            } header: {
+                Text("Prénoms récents")
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
         }
     }
@@ -162,7 +176,7 @@ private struct NewGameContent: View {
     // MARK: Règles
 
     private var rulesSection: some View {
-        Section("Règles") {
+        Section {
             Text(model.rulesSummary)
             DisclosureGroup("Règles maison", isExpanded: Bindable(model).houseRulesExpanded) {
                 Stepper(
@@ -180,10 +194,13 @@ private struct NewGameContent: View {
                 if model.isCloserPenaltyDisabled || model.targetScore != GameRules.officialTargetScore {
                     Text("Variante non officielle\u{00A0}: les scores suivront ces réglages.")
                         .font(Theme.Typography.detail)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                 }
             }
             .accessibilityIdentifier(AccessibilityID.Setup.houseRules)
+        } header: {
+            Text("Règles")
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 

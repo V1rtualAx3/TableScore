@@ -18,6 +18,7 @@ struct HistoryCardsSheet: View {
                         } header: {
                             Text(verbatim: player.name)
                                 .textCase(nil)
+                                .foregroundStyle(Theme.Palette.secondaryText)
                         }
                     }
                 }
@@ -42,7 +43,8 @@ struct HistoryCardsSheet: View {
 /// Textes, libellés VoiceOver et disposition (4 colonnes, 2 × 2 en tailles d'accessibilité) :
 /// `CardGridPresentation` et `CardGridColumnsLayout`, partagés avec l'éditeur ; valeurs dérivées
 /// de `CardGrid.evaluate()` du Kit, aucun calcul ici. VoiceOver : un élément par colonne
-/// (« Colonne 1, 0 point, colonne non comptée », valeur « 7, 7, 7 »), puis le total.
+/// (« Colonne 1, 0 point, colonne non comptée », valeur « 7, 7, 7 »), les explications affichées,
+/// puis le total.
 struct HistoryCardGridView: View {
     let grid: CardGrid
     let playerName: String
@@ -64,8 +66,9 @@ struct HistoryCardGridView: View {
                     Image(systemName: "nosign")
                 }
                 .font(Theme.Typography.detail)
-                .foregroundStyle(Color.secondary)
-                .accessibilityHidden(true) // déjà lu avec la colonne concernée
+                .foregroundStyle(Theme.Palette.secondaryText)
+                // Texte visible donc exposé (un texte masqué est signalé par l'audit), lu d'un bloc.
+                .accessibilityElement(children: .combine)
             }
             HStack(alignment: .firstTextBaseline) {
                 Text("Total brut")
@@ -84,7 +87,7 @@ struct HistoryCardGridView: View {
         VStack(spacing: Theme.Spacing.xs) {
             Text(verbatim: column.title)
                 .font(.caption)
-                .foregroundStyle(Color.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
             ForEach(column.cells) { cell in
                 cellView(cell)
             }
@@ -93,7 +96,7 @@ struct HistoryCardGridView: View {
             if let shortStatus = column.shortStatus {
                 Text(verbatim: shortStatus)
                     .font(.caption)
-                    .foregroundStyle(Color.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -108,12 +111,13 @@ struct HistoryCardGridView: View {
 
     private func cellView(_ cell: CardGridPresentation.Cell) -> some View {
         let shape = RoundedRectangle(cornerRadius: Theme.Spacing.s)
+        // « −2 » à « 12 » ou « — » : une ligne, taille idéale (jamais tronquée).
         return Text(verbatim: cell.displayText)
             .font(Theme.Typography.entryScore)
-            .lineLimit(1)
             // Colonne non comptée : valeur barrée (texte secondaire, contraste conservé), jamais effacée.
             .strikethrough(cell.isExcluded && cell.value != nil)
-            .foregroundStyle(cell.isExcluded || cell.value == nil ? Color.secondary : Color.primary)
+            .foregroundStyle(cell.isExcluded || cell.value == nil ? Theme.Palette.secondaryText : Color.primary)
+            .fixedSize()
             .frame(maxWidth: .infinity, minHeight: cellHeight)
             .background(shape.fill(Color(.tertiarySystemFill)))
     }

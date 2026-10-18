@@ -64,7 +64,7 @@ private struct GameContentView: View {
                             Text(model.headerTitle).font(.headline)
                             Text(model.headerSubtitle)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Theme.Palette.secondaryText)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -159,7 +159,7 @@ private struct GameContentView: View {
                     if model.roundCount == 0 {
                         Text("Aucune manche pour l'instant. Les totaux apparaîtront ici.")
                             .font(Theme.Typography.detail)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.Palette.secondaryText)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, Theme.Spacing.xs)
                     }
@@ -261,7 +261,7 @@ private struct GameContentView: View {
                 Text(title)
                 Spacer(minLength: Theme.Spacing.s)
                 Image(systemName: "chevron.right")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
                     .accessibilityHidden(true)
             }
             .frame(minHeight: Theme.Size.minTapTarget)
@@ -315,9 +315,13 @@ private struct GameContentView: View {
         } description: {
             Text(message)
         } actions: {
-            Button("Accueil") { router.popToRoot() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            Button {
+                router.popToRoot()
+            } label: {
+                Text("Accueil").onAccentForeground()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
     }
 

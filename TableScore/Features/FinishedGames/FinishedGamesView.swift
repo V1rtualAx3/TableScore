@@ -33,8 +33,12 @@ struct FinishedGamesView: View {
             } description: {
                 Text(message)
             } actions: {
-                Button("Réessayer") { model.load() }
-                    .buttonStyle(.borderedProminent)
+                Button {
+                    model.load()
+                } label: {
+                    Text("Réessayer").onAccentForeground()
+                }
+                .buttonStyle(.borderedProminent)
             }
         } else if model.isLoaded && model.rows.isEmpty {
             ContentUnavailableView(
@@ -121,26 +125,32 @@ private struct FinishedGameRowContent: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.m) {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                HStack(spacing: Theme.Spacing.s) {
-                    Text(row.date, format: .dateTime.day().month(.abbreviated).year().hour().minute().locale(Theme.locale))
-                        .font(.headline)
-                    StatusTag(kind: row.kind)
+                // Date et statut côte à côte s'ils tiennent, sinon l'un sous l'autre (aucune troncature).
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Theme.Spacing.s) {
+                        dateText
+                        StatusTag(kind: row.kind)
+                    }
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                        dateText
+                        StatusTag(kind: row.kind)
+                    }
                 }
                 if row.isReadable {
                     Text(playersText)
                         .font(Theme.Typography.detail)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                     if let winnersText {
                         Label(winnersText, systemImage: Theme.Symbol.leader)
                             .font(Theme.Typography.detail)
                     }
                     Text(roundsText)
                         .font(Theme.Typography.detail)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                 } else {
                     Text("Les données de cette partie sont illisibles. Vous pouvez la supprimer.")
                         .font(Theme.Typography.detail)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                 }
             }
             Spacer(minLength: 0)
@@ -148,6 +158,12 @@ private struct FinishedGameRowContent: View {
         .frame(minHeight: Theme.Size.minTapTarget)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+
+    private var dateText: some View {
+        Text(row.date, format: .dateTime.day().month(.abbreviated).year().hour().minute().locale(Theme.locale))
+            .font(.headline)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var playersText: String {
@@ -182,6 +198,8 @@ private struct StatusTag: View {
                 .foregroundStyle(kind == .finished ? Color.primary : Theme.Palette.warning)
         }
             .font(.caption.weight(.semibold))
+            // Étiquette courte : jamais compressée ni tronquée (la ligne passe à la verticale).
+            .fixedSize()
             .padding(.horizontal, Theme.Spacing.s)
             .padding(.vertical, Theme.Spacing.xs)
             .background(Theme.Palette.surface, in: Capsule())

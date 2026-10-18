@@ -44,7 +44,7 @@ struct RulesView: View {
 
                 Text("Texte reformulé. En cas de doute, la notice de votre boîte de jeu fait foi.")
                     .font(Theme.Typography.detail)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(Theme.Spacing.l)
@@ -97,7 +97,7 @@ private struct ExampleRow: View {
                 .font(.body.monospacedDigit())
             Text("\(example.closer) termine\u{00A0}: score retenu \(example.retained), \(example.cause).")
                 .font(Theme.Typography.detail)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.Spacing.m)

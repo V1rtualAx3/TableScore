@@ -68,7 +68,9 @@ struct CardGridPresentation: Equatable, Sendable {
         let shortStatus: String?
         /// Explication complète (sous la grille) ; `nil` si la colonne compte normalement.
         let statusMessage: String?
-        /// Libellé VoiceOver de la bascule : « Retirer la colonne 2 » (valeur activé/désactivé).
+        /// Libellé VoiceOver de la bascule : « Colonne retirée, colonne 2 » (valeur activé/désactivé).
+        /// Commence par le texte visible « Colonne retirée » (Contrôle vocal ; l'audit signale un
+        /// texte visible absent du libellé comme « potentiellement inaccessible »).
         let removeToggleAccessibilityLabel: String
         let removeToggleIdentifier: String
 
@@ -298,7 +300,7 @@ struct CardGridPresentation: Equatable, Sendable {
             subtotalAccessibilityLabel: subtotalLabel,
             shortStatus: shortStatus,
             statusMessage: statusMessage,
-            removeToggleAccessibilityLabel: "Retirer la colonne \(index + 1)",
+            removeToggleAccessibilityLabel: "\(removeColumnTitle), colonne \(index + 1)",
             removeToggleIdentifier: AccessibilityID.Cards.removeColumn(position: position, column: index)
         )
     }

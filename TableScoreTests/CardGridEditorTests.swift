@@ -201,7 +201,7 @@ struct CardGridEditorTests {
         #expect(sut.columns[0].cells[1].spokenDescription == "Alice, colonne 1, rangée 2, 3")
         #expect(sut.columns[2].cells[0].spokenDescription == "Alice, colonne 3, rangée 1, moins 2")
         #expect(sut.columns[3].cells[2].spokenDescription == "Alice, colonne 4, rangée 3, 4, colonne retirée")
-        #expect(sut.columns[3].removeToggleAccessibilityLabel == "Retirer la colonne 4")
+        #expect(sut.columns[3].removeToggleAccessibilityLabel == "Colonne retirée, colonne 4")
         #expect(sut.columns[3].subtotalAccessibilityLabel == "Colonne 4, 0 point, colonne retirée")
         #expect(sut.columns[0].subtotalAccessibilityLabel == "Colonne 1, 6 points, provisoire, 1\(Self.nbsp)carte à saisir")
         #expect(sut.totalAccessibilityLabel == "Alice, total brut 15 points, provisoire, 1\(Self.nbsp)carte à saisir")

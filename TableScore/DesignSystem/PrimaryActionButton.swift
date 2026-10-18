@@ -33,6 +33,7 @@ struct PrimaryActionButton: View {
                 Text(isLoading ? loadingTitle : title)
             }
             .frame(maxWidth: .infinity)
+            .onAccentForeground()
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
@@ -40,7 +41,29 @@ struct PrimaryActionButton: View {
     }
 }
 
+/// Libellé d'un bouton `.borderedProminent` : `Theme.Palette.onAccent` (blanc en clair, noir en
+/// sombre, où la teinte est claire), tant que le bouton est actif ; désactivé, le style système
+/// garde son propre rendu. À appliquer **dans** le libellé du bouton (l'environnement `isEnabled`
+/// y reflète `.disabled(...)` posé sur le bouton, et le style ne peut pas l'écraser).
+private struct OnAccentForeground: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.foregroundStyle(Theme.Palette.onAccent)
+        } else {
+            content
+        }
+    }
+}
+
 extension View {
+    /// Couleur du libellé d'un bouton `.borderedProminent` (voir `OnAccentForeground`).
+    func onAccentForeground() -> some View {
+        modifier(OnAccentForeground())
+    }
+
     /// Zone d'action fixée en bas de l'écran, à portée de pouce, au-dessus du clavier
     /// (safe area clavier respectée : ne pas combiner avec `.ignoresSafeArea(.keyboard)`).
     /// Le matériau `.bar` ne sert qu'à séparer l'action du contenu qui défile.

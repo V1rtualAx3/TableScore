@@ -39,10 +39,12 @@ struct StorageErrorView: View {
                 }
             }
         } actions: {
-            Button("Réessayer", action: onRetry)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .accessibilityIdentifier(AccessibilityID.StorageError.retry)
+            Button(action: onRetry) {
+                Text("Réessayer").onAccentForeground()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityIdentifier(AccessibilityID.StorageError.retry)
             // Uniquement pour un store réellement illisible, appareil déverrouillé.
             if AppBootstrap.offersSetAsideNow(context: context) {
                 Button("Mettre de côté les données illisibles et repartir de zéro") {

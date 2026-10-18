@@ -166,11 +166,13 @@ private struct CardGridColumnView: View {
 
     var body: some View {
         VStack(spacing: Theme.Spacing.s) {
+            // Texte simple, visible et toujours exposé à l'accessibilité (non masqué). Retour à la
+            // ligne permis plutôt qu'une troncature en grande taille de texte.
             Text(verbatim: column.title)
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .accessibilityHidden(true) // déjà dans le libellé de chaque case
+                .foregroundStyle(Theme.Palette.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             CardColumnRemovalToggle(column: column, onToggle: { onToggleRemoved(column.index) })
             ForEach(column.cells) { cell in
                 CardCellButton(
@@ -201,12 +203,13 @@ private struct CardCellButton: View {
 
     var body: some View {
         Button(action: onSelect) {
+            // « −2 » à « 12 » ou « — » : toujours sur une ligne, sans troncature (`fixedSize`).
             Text(verbatim: cell.displayText)
                 .font(Theme.Typography.entryScore)
                 .monospacedDigit()
-                .lineLimit(1)
                 .strikethrough(cell.isExcluded && cell.value != nil)
                 .foregroundStyle(textStyle)
+                .fixedSize()
                 .frame(maxWidth: .infinity, minHeight: max(cellHeight, Theme.Size.minTapTarget))
                 .background { background }
                 .overlay { selectionRing }
@@ -224,9 +227,11 @@ private struct CardCellButton: View {
 
     private var isIncreasedContrast: Bool { contrast == .increased }
 
+    /// Case vide (« — ») ou colonne non comptée : couleur secondaire **contrastée** (≥ 4,5:1).
     private var textStyle: Color {
-        if cell.value == nil { return isIncreasedContrast ? .primary : .secondary }
-        if cell.isExcluded { return isIncreasedContrast ? .primary : .secondary }
+        if cell.value == nil || cell.isExcluded {
+            return isIncreasedContrast ? .primary : Theme.Palette.secondaryText
+        }
         return .primary
     }
 
@@ -235,7 +240,7 @@ private struct CardCellButton: View {
         let shape = RoundedRectangle(cornerRadius: Theme.Spacing.s)
         if cell.value == nil {
             shape.strokeBorder(
-                isIncreasedContrast ? Color.primary : Color.secondary,
+                isIncreasedContrast ? Color.primary : Theme.Palette.secondaryText,
                 style: StrokeStyle(lineWidth: 1, dash: [4, 3])
             )
         } else {
@@ -265,7 +270,7 @@ private struct CardCellButton: View {
 
 /// Bascule « Colonne retirée » : la colonne compte 0, ses valeurs sont conservées (re-basculer
 /// les restaure). État porté par le symbole (case cochée), pas seulement la couleur ;
-/// VoiceOver : « Retirer la colonne 2, activé/désactivé, bouton bascule ».
+/// VoiceOver : « Colonne retirée, colonne 2, activé/désactivé, bouton bascule ».
 private struct CardColumnRemovalToggle: View {
     let column: CardGridPresentation.Column
     let onToggle: () -> Void
@@ -310,8 +315,9 @@ private struct CardColumnSubtotal: View {
             if let shortStatus = column.shortStatus {
                 Text(verbatim: shortStatus)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
                     .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -330,7 +336,7 @@ private struct CardGridStatusMessages: View {
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "nosign")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                 }
                 .font(Theme.Typography.detail)
                 .accessibilityElement(children: .combine)
@@ -377,7 +383,7 @@ private struct CardGridTotalRow: View {
                     .foregroundStyle(isComplete ? Theme.Palette.accent : Theme.Palette.warning)
             }
             .font(Theme.Typography.detail)
-            .foregroundStyle(isComplete ? Color.secondary : Color.primary)
+            .foregroundStyle(isComplete ? Theme.Palette.secondaryText : Color.primary)
         }
     }
 }

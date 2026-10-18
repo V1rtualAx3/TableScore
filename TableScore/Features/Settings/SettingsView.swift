@@ -42,12 +42,17 @@ struct SettingsView: View {
                     .accessibilityIdentifier(AccessibilityID.Settings.haptics)
             } footer: {
                 Text("Vibrations légères lors de l'enregistrement d'une manche et en fin de partie.")
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
 
             Section {
-                Button("Supprimer toutes les données", role: .destructive) {
+                Button(role: .destructive) {
                     model.beginDeletion()
                     isFirstConfirmationPresented = true
+                } label: {
+                    // Rouge système ≈ 3,6:1 en clair : rouge contrasté du thème.
+                    Text("Supprimer toutes les données")
+                        .foregroundStyle(Theme.Palette.destructive)
                 }
                 .accessibilityIdentifier(AccessibilityID.Settings.deleteAllData)
                 .frame(minHeight: Theme.Size.minTapTarget, alignment: .leading)
@@ -62,17 +67,20 @@ struct SettingsView: View {
                     Text("Toutes les parties, en cours, terminées ou interrompues, seront supprimées de cet iPhone.")
                 }
             } footer: {
-                if model.didDeleteAll {
-                    Label("Toutes les parties ont été supprimées de cet iPhone.", systemImage: "checkmark.circle")
-                } else {
-                    Text(
-                        "Toutes les parties sont supprimées de cet iPhone. Les sauvegardes iCloud ou "
-                        + "de l'ordinateur faites auparavant peuvent encore les contenir."
-                    )
+                Group {
+                    if model.didDeleteAll {
+                        Label("Toutes les parties ont été supprimées de cet iPhone.", systemImage: "checkmark.circle")
+                    } else {
+                        Text(
+                            "Toutes les parties sont supprimées de cet iPhone. Les sauvegardes iCloud ou "
+                            + "de l'ordinateur faites auparavant peuvent encore les contenir."
+                        )
+                    }
                 }
+                .foregroundStyle(Theme.Palette.secondaryText)
             }
 
-            Section("Confidentialité") {
+            Section {
                 Text(
                     "Vos données (prénoms saisis et scores) restent uniquement sur cet iPhone. "
                     + "L'application n'établit aucune connexion et ne collecte rien."
@@ -81,13 +89,22 @@ struct SettingsView: View {
                     "Les sauvegardes de l'iPhone ou d'iCloud, gérées par le système et selon vos réglages, "
                     + "peuvent inclure ces données."
                 )
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
+            } header: {
+                Text("Confidentialité")
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
 
-            Section("À propos") {
-                LabeledContent("Version", value: SettingsModel.currentVersionText)
+            Section {
+                LabeledContent("Version") {
+                    Text(verbatim: SettingsModel.currentVersionText)
+                        .foregroundStyle(Theme.Palette.secondaryText)
+                }
                 Text("Fonctionne entièrement hors ligne.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+            } header: {
+                Text("À propos")
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
         }
         .onChange(of: model.didDeleteAll) { _, deleted in

@@ -22,7 +22,7 @@ struct GameOverSection: View {
                 finalScores(summary)
                 Text(summary.rulesReminder)
                     .font(Theme.Typography.detail)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 titleText
@@ -72,7 +72,7 @@ struct GameOverSection: View {
                 ? String(localized: "Après 1 manche")
                 : String(localized: "Après \(summary.roundCount) manches"))
                 .font(Theme.Typography.detail)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 
@@ -86,30 +86,15 @@ struct GameOverSection: View {
 
     @ViewBuilder
     private func lineView(_ line: GameOverSummary.Line) -> some View {
-        let content = Group {
-            Text("\(PlayerScoreRow.rankText(line.rank)) · \(line.name)")
-                .font(Theme.Typography.playerName)
-                .fontWeight(line.isWinner ? .bold : .regular)
-                .lineLimit(2)
-            if line.isWinner {
-                // Texte lisible (.primary) ; la couleur ne porte que l'icône.
-                Label {
-                    Text("Vainqueur").foregroundStyle(.primary)
-                } icon: {
-                    Image(systemName: Theme.Symbol.leader).foregroundStyle(Theme.Palette.leader)
-                }
-                .font(.caption.bold())
-            }
-        }
         Group {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                    content
+                    lineContent(line)
                     ScoreText(line.total, font: .title.monospacedDigit().bold())
                 }
             } else {
                 HStack(spacing: Theme.Spacing.s) {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) { content }
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) { lineContent(line) }
                     Spacer(minLength: Theme.Spacing.s)
                     ScoreText(line.total, font: .title.monospacedDigit().bold())
                 }
@@ -118,6 +103,23 @@ struct GameOverSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenLine(line))
+    }
+
+    @ViewBuilder
+    private func lineContent(_ line: GameOverSummary.Line) -> some View {
+        Text("\(PlayerScoreRow.rankText(line.rank)) · \(line.name)")
+            .font(Theme.Typography.playerName)
+            .fontWeight(line.isWinner ? .bold : .regular)
+            .lineLimit(2)
+        if line.isWinner {
+            // Texte lisible (.primary) ; la couleur ne porte que l'icône.
+            Label {
+                Text("Vainqueur").foregroundStyle(.primary)
+            } icon: {
+                Image(systemName: Theme.Symbol.leader).foregroundStyle(Theme.Palette.leader)
+            }
+            .font(.caption.bold())
+        }
     }
 
     private func spokenLine(_ line: GameOverSummary.Line) -> String {

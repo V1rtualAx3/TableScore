@@ -65,10 +65,54 @@ Le script appelle `xcrun xcresulttool export attachments` ; `ScreenshotTests` se
 ## Audits d'accessibilité
 
 Le parcours des 15 écrans de chaque thème exécute aussi `performAccessibilityAudit()` (audit complet,
-sans exclusion) sur chaque écran, juste après sa capture (`ScreenshotTests`, helper
-`AccessibilityAuditUITests.swift`). Un défaut fait échouer le test sans interrompre le parcours ; chaque
-problème est rapporté sous la forme « [écran] type d'audit — résumé — élément : … — détail », avec une
-capture `audit-…` jointe au test en échec. La passe AX3 n'est pas auditée (captures seules).
+tous types) sur chaque écran, juste après sa capture (`ScreenshotTests`, helper
+`AccessibilityAuditUITests.swift`). Un défaut fait échouer le test sans interrompre le parcours ; la passe
+AX3 n'est pas auditée (captures seules).
+
+### Lire les résultats
+
+- **Échecs** : un `XCTFail` d'une seule ligne par problème,
+  « [écran] type d'audit — résumé — élément — détail », l'élément étant décrit par son type, son
+  identifiant d'accessibilité, son libellé (70 caractères au plus) et son cadre (`@x,y largeur×hauteur`).
+  Une capture `audit-<écran>` est jointe au test en échec.
+- **Résumé de fin de parcours** (dans le journal, même si le parcours est interrompu) : bloc
+  `===== RÉSUMÉ AUDIT ACCESSIBILITÉ (clair|sombre) … =====` de 150 lignes au plus : totaux par écran et
+  par type, puis une ligne par problème distinct (écran | type | résumé | élément | ×occurrences). Il est
+  imprimé à la fin de chaque test de thème, donc visible dans les 5 000 dernières lignes affichées par
+  GitHub. Le résumé complet est joint au résultat de tests (`resume-audit-clair`, `resume-audit-sombre`,
+  dans l'artefact `TestResults-xcresult` ; ignoré par l'export des captures).
+
+### Exceptions (faux positifs)
+
+Aucun type d'audit n'est exclu globalement. Une exception n'est admise que pour un faux positif
+**démontré**, déclarée dans `AccessibilityAudit.exemptions` avec écran, type d'audit, identifiant (ou
+libellé exact) de l'élément et justification, puis listée ci-dessous. Un problème toléré n'échoue pas mais
+reste affiché dans le résumé (« TOLÉRÉ : raison »).
+
+| Écran | Type | Élément | Justification |
+|---|---|---|---|
+| — | — | — | Aucune exception à ce jour. |
+
+### Corrections de fond (audit de la PR n° 5)
+
+- **Contraste** : les couleurs système `.secondary`/`.tertiary`/`secondaryLabel` (≈ 3,1–3,4:1 en clair),
+  `.orange`/`.green`/`.red` (≈ 2–3,6:1 en clair) et le texte d'attente des champs ne servent plus de
+  couleur de texte ; jetons `Theme.Palette.secondaryText`, `leader`, `doubled`/`warning`, `destructive`
+  (≥ 4,5:1 sur tous les fonds de l'app, clair et sombre), y compris en-têtes et pieds de sections de
+  formulaires. Teinte `AccentColor` : clair `#1A626A`, sombre `#58BEC9` (l'ancienne teinte sombre tombait
+  à 3,4:1 en texte sur `#1C1C1E`) ; libellé des boutons proéminents noir en sombre (`onAccent`, ≈ 9,6:1).
+- **Texte potentiellement inaccessible** (textes visibles masqués à VoiceOver) : prénoms des lignes de
+  saisie et titres de colonnes de la grille en texte simple exposé ; explications de la grille consultée
+  exposées ; libellés de « Colonne retirée » et du bouton « Colonne N retirée » commençant par le texte
+  visible (Contrôle vocal, WCAG 2.5.3).
+- **Zone touchable** : bouton « OK » du sélecteur de valeur (cadre de 44 pt dans le libellé).
+- **Troncature** : valeurs de cartes en taille idéale (`fixedSize`) au lieu de `lineLimit(1)` ; titre du
+  sélecteur et titres de colonnes sur plusieurs lignes si besoin ; date et statut des parties terminées
+  empilés quand ils ne tiennent pas sur une ligne.
+- **Dynamic Type** : totaux en `.largeTitle` (style de texte direct, sans police arrondie recréée).
+- Restes à confirmer par le prochain résumé de la CI (élément exact) : zone touchable des champs de score
+  et des sélecteurs « Points | Cartes », Dynamic Type des écrans 07, 08, 09, 12, 13, textes tronqués des
+  écrans 08 à 13.
 
 ## Limites
 

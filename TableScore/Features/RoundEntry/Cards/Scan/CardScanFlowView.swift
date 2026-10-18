@@ -142,6 +142,7 @@ private struct CardScanCaptureView: View {
                 } label: {
                     Label("Prendre la photo", systemImage: "camera.fill")
                         .frame(maxWidth: .infinity)
+                        .onAccentForeground()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -208,9 +209,12 @@ private struct CardScanMessageView: View {
             Text(verbatim: content.message)
         } actions: {
             if phase == .failed || phase == .interrupted {
-                Button(LocalizedStringKey(phase == .failed ? "Reprendre la photo" : "Réessayer"), action: onRetake)
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier(AccessibilityID.Scan.retake)
+                Button(action: onRetake) {
+                    Text(LocalizedStringKey(phase == .failed ? "Reprendre la photo" : "Réessayer"))
+                        .onAccentForeground()
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier(AccessibilityID.Scan.retake)
             }
             Button("Saisir à la main", action: onClose)
                 .buttonStyle(.bordered)

@@ -95,7 +95,7 @@ private struct HomeScreen: View {
     private var tagline: some View {
         Text("Les scores de votre partie, sans papier ni crayon.")
             .font(.title3)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.Palette.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -108,7 +108,7 @@ private struct HomeScreen: View {
                 Text("Partie terminée\u{00A0}: résultat à consulter")
             }
             Text(HomeModel.lastSavedText(updatedAt: summary.updatedAt))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
         .font(Theme.Typography.detail)
         .frame(maxWidth: .infinity, alignment: .leading)

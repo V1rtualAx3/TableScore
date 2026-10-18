@@ -29,12 +29,16 @@ final class ScreenshotTests: XCTestCase {
         add(attachment)
     }
 
+    /// Le résumé compact des problèmes d'audit est imprimé à la fin du parcours, même interrompu
+    /// (`defer`) : il reste lisible en fin de journal de la CI.
     @MainActor
     private func captureAndAuditFullTour(appearance: UITestAppearance) throws {
         let app = XCUIApplication()
+        let report = AccessibilityAudit.Report(title: appearance.label)
+        defer { report.finish(in: self) }
         let tour = ScreenTour(app: app, appearance: appearance) { [self] name in
             attachScreenshot(of: app, named: name)
-            AccessibilityAudit.run(on: app, screen: name, in: self)
+            AccessibilityAudit.run(on: app, screen: name, in: self, report: report)
         }
         try tour.runFullTour()
     }

@@ -184,8 +184,10 @@ private struct RoundEntryForm: View {
                 }
             } header: {
                 Text("Points de la manche")
+                    .foregroundStyle(Theme.Palette.secondaryText)
             } footer: {
                 Text("Points\u{00A0}: score de chaque joueur, colonnes déjà retirées\u{00A0}; «\u{00A0}±\u{00A0}» rend un score négatif. Cartes\u{00A0}: grille finale du joueur, total calculé.")
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
 
             CloserPicker(model: model)
@@ -507,7 +509,7 @@ private struct CloserPreviewLabel: View {
                 .foregroundStyle(Theme.Palette.doubled)
         } else {
             Image(systemName: Theme.Symbol.closer)
-                .foregroundStyle(Color.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 
@@ -529,7 +531,7 @@ private struct BlockingSummaryLabel: View {
             Image(systemName: "info.circle")
         }
         .font(.footnote)
-        .foregroundStyle(Color.secondary)
+        .foregroundStyle(Theme.Palette.secondaryText)
         .lineLimit(lineLimit)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)

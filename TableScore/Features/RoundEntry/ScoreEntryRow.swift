@@ -77,7 +77,10 @@ struct ScoreEntryRow: View {
             .font(Theme.Typography.playerName)
             // Tailles d'accessibilité : prénom jamais tronqué (il est seul sur sa ligne).
             .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-            .accessibilityHidden(true) // déjà dans le libellé du champ, du bouton et du sélecteur
+            // Exposé comme en-tête de la ligne du joueur (navigation par en-têtes dans un formulaire
+            // de 8 joueurs) : masqué, ce texte visible était signalé par l'audit (« texte
+            // potentiellement inaccessible »).
+            .accessibilityAddTraits(.isHeader)
     }
 
     // MARK: Mode « Points »
@@ -92,7 +95,7 @@ struct ScoreEntryRow: View {
                     .foregroundStyle(Theme.Palette.warning)
             }
             .font(Theme.Typography.detail)
-            .foregroundStyle(field.isError ? Color.primary : Color.secondary)
+            .foregroundStyle(field.isError ? Color.primary : Theme.Palette.secondaryText)
             .accessibilityElement(children: .combine)
         }
         if let notice = field.cardsNotice {
@@ -103,7 +106,7 @@ struct ScoreEntryRow: View {
                 Image(systemName: "info.circle")
             }
             .font(Theme.Typography.detail)
-            .foregroundStyle(Color.secondary)
+            .foregroundStyle(Theme.Palette.secondaryText)
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier(AccessibilityID.Round.cardsNotice(position: field.position))
         }
@@ -138,21 +141,30 @@ struct ScoreEntryRow: View {
             .accessibilitySortPriority(0)
             .accessibilityIdentifier(AccessibilityID.Round.sign(position: field.position))
 
-            TextField("—", text: textBinding)
-                .keyboardType(.numberPad)
-                .autocorrectionDisabled()
-                .multilineTextAlignment(.trailing)
-                .font(Theme.Typography.entryScore)
-                .padding(.horizontal, Theme.Spacing.s)
-                .frame(minWidth: fieldMinWidth, maxWidth: fieldMinWidth * 1.6, minHeight: Theme.Size.minTapTarget)
-                .background { fieldBackground }
-                .focused(focus, equals: field.participantID)
-                .accessibilityLabel(Text(verbatim: "Score \(VerdictText.ofName(field.name))"))
-                .accessibilityValue(field.spokenValue)
-                .accessibilitySortPriority(1)
-                .accessibilityIdentifier(AccessibilityID.Round.score(position: field.position))
+            // Texte d'attente « — » en couleur secondaire contrastée (celle du système, ≈ 2:1, est
+            // signalée par l'audit de contraste) ; la valeur VoiceOver d'un champ vide reste « vide ».
+            TextField(text: textBinding, prompt: placeholder) {
+                Text(verbatim: "—")
+            }
+            .keyboardType(.numberPad)
+            .autocorrectionDisabled()
+            .multilineTextAlignment(.trailing)
+            .font(Theme.Typography.entryScore)
+            .padding(.horizontal, Theme.Spacing.s)
+            .frame(minWidth: fieldMinWidth, maxWidth: fieldMinWidth * 1.6, minHeight: Theme.Size.minTapTarget)
+            .background { fieldBackground }
+            .focused(focus, equals: field.participantID)
+            .accessibilityLabel(Text(verbatim: "Score \(VerdictText.ofName(field.name))"))
+            .accessibilityValue(field.spokenValue)
+            .accessibilitySortPriority(1)
+            .accessibilityIdentifier(AccessibilityID.Round.score(position: field.position))
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// « — » (jamais « 0 ») en couleur secondaire contrastée.
+    private var placeholder: Text {
+        Text(verbatim: "—").foregroundStyle(Theme.Palette.secondaryText)
     }
 
     /// Cadre visible du champ (44 pt de haut au minimum). Le champ texte lui-même est plus petit

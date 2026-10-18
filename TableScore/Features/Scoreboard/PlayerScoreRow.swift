@@ -54,7 +54,7 @@ struct PlayerScoreRow: View {
     @ViewBuilder
     private var detailItems: some View {
         Text(Self.rankText(row.rank))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.Palette.secondaryText)
         if row.isLeader {
             Label {
                 Text("En tête")
@@ -70,7 +70,7 @@ struct PlayerScoreRow: View {
         if let gap = row.gapToLeader, gap > 0 {
             Text(Self.gapText(gap))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 
