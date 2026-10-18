@@ -52,7 +52,7 @@ struct CardScanFlowView: View {
             case .preparing:
                 CardScanProgress(text: "Ouverture de l'appareil photo…")
             case .capturing:
-                if let camera = model.camera {
+                if let camera = model.camera as? CardScanCamera {
                     CardScanCaptureView(camera: camera) { region in
                         Task { await model.capture(region: region) }
                     }
@@ -68,7 +68,9 @@ struct CardScanFlowView: View {
                     onUse: { use($0) },
                     onRetake: { Task { await model.retake() } }
                 )
-            case .denied, .restricted, .unavailable, .failed:
+                // Nouvelle vérification (grille locale réinitialisée) à chaque résultat.
+                .id(model.resultCount)
+            case .denied, .restricted, .unavailable, .interrupted, .failed:
                 CardScanMessageView(
                     phase: model.phase,
                     onRetake: { Task { await model.retake() } },
@@ -205,8 +207,8 @@ private struct CardScanMessageView: View {
         } description: {
             Text(verbatim: content.message)
         } actions: {
-            if phase == .failed {
-                Button("Reprendre la photo", action: onRetake)
+            if phase == .failed || phase == .interrupted {
+                Button(LocalizedStringKey(phase == .failed ? "Reprendre la photo" : "Réessayer"), action: onRetake)
                     .buttonStyle(.borderedProminent)
                     .accessibilityIdentifier(AccessibilityID.Scan.retake)
             }
@@ -230,6 +232,12 @@ private struct CardScanMessageView: View {
                 "Appareil photo limité",
                 "L'accès à l'appareil photo est limité sur cet iPhone (Temps d'écran ou gestion de l'appareil). \(manual)",
                 "lock.fill"
+            )
+        case .interrupted:
+            return (
+                "Appareil photo interrompu",
+                "Un appel ou une autre app utilise l'appareil photo. La prise de vue reprend dès qu'il est libéré. \(manual)",
+                "pause.circle"
             )
         case .failed:
             return (

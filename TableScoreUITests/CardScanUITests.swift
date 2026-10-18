@@ -43,7 +43,7 @@ final class CardScanUITests: XCTestCase {
         let use = robot.app.buttons["scan.review.use"]
         XCTAssertTrue(use.isEnabled)
         use.tap()
-        XCTAssertTrue(robot.waitForDisappearance(of: use), "La vérification doit se fermer après « Utiliser ».")
+        XCTAssertTrue(use.waitForNonExistence(timeout: 5), "La vérification doit se fermer après « Utiliser ».")
 
         let total = robot.element("cards.total.0")
         robot.reveal(total)
@@ -64,7 +64,7 @@ final class CardScanUITests: XCTestCase {
         let done = robot.app.buttons["cards.valuePicker.done"]
         XCTAssertTrue(done.waitForExistence(timeout: 5))
         done.tap()
-        XCTAssertTrue(robot.waitForDisappearance(of: five), "Le sélecteur doit se fermer.")
+        XCTAssertTrue(five.waitForNonExistence(timeout: 5), "Le sélecteur doit se fermer.")
 
         robot.startScan()
         let summary = robot.element("scan.review.summary")
@@ -86,7 +86,7 @@ final class CardScanUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(replace.waitForExistence(timeout: 5), "Confirmation « Remplacer les cartes saisies ? » attendue.")
         replace.tap()
-        XCTAssertTrue(robot.waitForDisappearance(of: use), "La vérification doit se fermer après le remplacement.")
+        XCTAssertTrue(use.waitForNonExistence(timeout: 5), "La vérification doit se fermer après le remplacement.")
 
         let total = robot.element("cards.total.0")
         robot.reveal(total)
@@ -105,7 +105,7 @@ final class CardScanUITests: XCTestCase {
         let cancel = robot.app.buttons["scan.cancel"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 10))
         cancel.tap()
-        XCTAssertTrue(robot.waitForDisappearance(of: cancel), "« Annuler » doit fermer le scan.")
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5), "« Annuler » doit fermer le scan.")
 
         let total = robot.element("cards.total.0")
         robot.reveal(total)
@@ -163,10 +163,5 @@ private struct CardScanRobot {
     func reveal(_ target: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         form.dismissKeyboard(file: file, line: line)
         form.bringIntoView(target, file: file, line: line)
-    }
-
-    func waitForDisappearance(of target: XCUIElement, timeout: TimeInterval = 5) -> Bool {
-        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: target)
-        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 }

@@ -34,13 +34,15 @@ struct CardScanSummary: Equatable, Sendable {
         "Cartes \(VerdictText.ofName(playerName))"
     }
 
-    /// « 10 cartes lues sur 12 », « 1 carte lue sur 12 », « Aucune carte lue ».
+    /// « 10 cartes lues sur 12 », « 1 carte lue sur 12 », « 0 carte lue sur 12 » (tout est à
+    /// vérifier), « Aucune carte lue » (rien repéré).
     var headline: String {
         let count = result.recognizedCount
         let total = CardScanResult.cardCount
         if result.detectedCount == 0 { return "Aucune carte lue" }
-        return count == 1
-            ? "1\(Self.nbsp)carte lue sur \(total)"
+        // Accord français : singulier pour 0 et 1.
+        return count <= 1
+            ? "\(count)\(Self.nbsp)carte lue sur \(total)"
             : "\(count)\(Self.nbsp)cartes lues sur \(total)"
     }
 
@@ -66,8 +68,19 @@ struct CardScanSummary: Equatable, Sendable {
                     + "bien éclairées et dans le cadre."
             )]
         }
-        var notes = result.uncertainCells.map { cell in
-            Note(kind: .warning, text: Self.uncertainText(cell: cell, suggestion: result.suggestions[cell]))
+        var notes: [Note] = []
+        if !result.misplacedCells.isEmpty {
+            notes.append(Note(kind: .warning, text: Self.positionsToVerifyText))
+        }
+        notes += result.uncertainCells.map { cell in
+            Note(
+                kind: .warning,
+                text: Self.uncertainText(
+                    cell: cell,
+                    suggestion: result.suggestions[cell],
+                    isMisplaced: result.misplacedCells.contains(cell)
+                )
+            )
         }
         notes += result.emptyColumns.map { column in
             Note(
@@ -88,14 +101,20 @@ struct CardScanSummary: Equatable, Sendable {
         return notes
     }
 
-    /// « Colonne 2, rangée 1 : lecture incertaine (6 ?), choisissez la valeur. »
-    static func uncertainText(cell: CardScanResult.Cell, suggestion: Int?) -> String {
+    /// Grille incomplète ou mal cadrée : la place de certaines cartes a été devinée.
+    static let positionsToVerifyText = "Positions à vérifier\(nbsp): la grille n'a pas été repérée en entier "
+        + "dans le cadre. Placez chaque carte à sa place."
+
+    /// « Colonne 2, rangée 1 : lecture incertaine (6 ?), choisissez la valeur. » ; place devinée :
+    /// « Colonne 2, rangée 1 : position incertaine (5 ?), vérifiez la place de cette carte. »
+    static func uncertainText(cell: CardScanResult.Cell, suggestion: Int?, isMisplaced: Bool = false) -> String {
         let position = CardGridPresentation.positionTitle(cell)
+        let reason = isMisplaced ? "position incertaine" : "lecture incertaine"
+        let action = isMisplaced ? "vérifiez la place de cette carte." : "choisissez la valeur."
         guard let suggestion else {
-            return "\(position)\(nbsp): lecture incertaine, choisissez la valeur."
+            return "\(position)\(nbsp): \(reason), \(action)"
         }
-        return "\(position)\(nbsp): lecture incertaine (\(ScoreFormat.display(suggestion))\(narrowNbsp)?), "
-            + "choisissez la valeur."
+        return "\(position)\(nbsp): \(reason) (\(ScoreFormat.display(suggestion))\(narrowNbsp)?), \(action)"
     }
 
     /// Rappel permanent sous la grille.
@@ -173,5 +192,15 @@ enum CardScanGeometry {
             height: Double(guide.height / viewSize.height) * visibleHeight
         )
         return box.isValid ? box : nil
+    }
+
+    /// Zone analysée par Vision : le cadre élargi de `margin`, borné à l'image, en coordonnées
+    /// Vision (normalisées, origine en bas à gauche).
+    static func visionRegion(for box: NormalizedBox, margin: Double) -> CGRect {
+        let minX = min(max(box.x - margin, 0), 1)
+        let maxX = min(max(box.x + box.width + margin, 0), 1)
+        let minY = min(max(box.y - margin, 0), 1)
+        let maxY = min(max(box.y + box.height + margin, 0), 1)
+        return CGRect(x: minX, y: 1 - maxY, width: max(maxX - minX, 0), height: max(maxY - minY, 0))
     }
 }

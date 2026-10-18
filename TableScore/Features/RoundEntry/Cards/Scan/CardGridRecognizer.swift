@@ -58,12 +58,16 @@ struct CardScanResult: Sendable, Equatable {
     /// Colonnes sans aucune carte lue (peut-être retirées pendant la manche : à marquer par
     /// l'utilisateur, jamais automatiquement).
     let emptyColumns: [Int]
+    /// Cases incertaines dont la **place** a été devinée (grille incomplète sans cadre, ou
+    /// incohérente avec le cadre) ; sous-ensemble de `uncertainCells`, même ordre.
+    let misplacedCells: [Cell]
 
     static let empty = CardScanResult(
         grid: CardGrid(),
         uncertainCells: [],
         suggestions: [:],
-        emptyColumns: Array(0..<CardGrid.columnCount)
+        emptyColumns: Array(0..<CardGrid.columnCount),
+        misplacedCells: []
     )
 
     static var cardCount: Int { CardGrid.columnCount * CardGrid.rowCount }
@@ -228,13 +232,25 @@ enum CardGridRecognizer {
         let reading: Reading
         let point: Point
         var isUncertain: Bool
+        /// Place devinée (voir `Placement`).
+        let isMisplaced: Bool
+    }
+
+    /// Emplacement (colonne, rangée) de chaque grappe, et grappes dont la place est devinée.
+    private struct Placement {
+        let columnSlots: [Int]
+        let rowSlots: [Int]
+        let guessedColumns: Set<Int>
+        let guessedRows: Set<Int>
     }
 
     /// Propose la grille d'un joueur.
     /// - Parameters:
     ///   - imageAspectRatio: largeur / hauteur de l'image redressée (0,75 en portrait 4:3).
     ///   - regionOfInterest: zone du cadre-guide dans l'image (normalisée) ; les textes dont le
-    ///     centre est en dehors (cartes d'un voisin, feuille de score…) sont ignorés.
+    ///     centre est en dehors (cartes d'un voisin, feuille de score…) sont ignorés, et la place
+    ///     de chaque colonne / rangée est déduite de sa position dans le cadre (largeur / 4,
+    ///     hauteur / 3). Sans cadre, une grille incomplète a des places devinées : cases à vérifier.
     static func recognize(
         _ observations: [CardScanObservation],
         imageAspectRatio: Double = Tuning.defaultImageAspectRatio,
@@ -243,7 +259,8 @@ enum CardGridRecognizer {
         let aspect = imageAspectRatio.isFinite && imageAspectRatio > 0
             ? imageAspectRatio : Tuning.defaultImageAspectRatio
         var readings = parseReadings(observations, aspect: aspect)
-        if let region = regionOfInterest, region.isValid {
+        let region = regionOfInterest.flatMap { $0.isValid ? $0 : nil }
+        if let region {
             readings = readings.filter {
                 region.contains(x: $0.center.x / aspect, y: $0.center.y, margin: Tuning.regionMargin)
             }
@@ -270,13 +287,24 @@ enum CardGridRecognizer {
         let threshold = Tuning.splitGapRatio * digitHeight
         let columns = clusters(of: points.map(\.x), maxClusters: CardGrid.columnCount, threshold: threshold)
         let rows = clusters(of: points.map(\.y), maxClusters: CardGrid.rowCount, threshold: threshold)
-        let columnSlots = slots(forCenters: columns.centers, slotCount: CardGrid.columnCount)
-        let rowSlots = slots(forCenters: rows.centers, slotCount: CardGrid.rowCount)
+        let placement = place(
+            columns: columns,
+            rows: rows,
+            centers: primary.map(\.center),
+            aspect: aspect,
+            region: region
+        )
 
         var candidatesByCell: [CardScanResult.Cell: [(reading: Reading, point: Point)]] = [:]
+        var misplaced: Set<CardScanResult.Cell> = []
         for (index, reading) in primary.enumerated() {
-            let cell = CardScanResult.Cell(column: columnSlots[columns.ids[index]], row: rowSlots[rows.ids[index]])
+            let columnID = columns.ids[index]
+            let rowID = rows.ids[index]
+            let cell = CardScanResult.Cell(column: placement.columnSlots[columnID], row: placement.rowSlots[rowID])
             candidatesByCell[cell, default: []].append((reading, points[index]))
+            if placement.guessedColumns.contains(columnID) || placement.guessedRows.contains(rowID) {
+                misplaced.insert(cell)
+            }
         }
 
         var cells: [CardScanResult.Cell: CellReading] = [:]
@@ -291,11 +319,13 @@ enum CardGridRecognizer {
             guard let best = ordered.first else { continue }
             let hasConflict = best.reading.hasConflict
                 || ordered.dropFirst().contains { $0.reading.value != best.reading.value }
+            let isMisplaced = misplaced.contains(cell)
             cells[cell] = CellReading(
                 reading: best.reading,
                 point: best.point,
-                isUncertain: hasConflict || best.reading.isAmbiguous
-                    || best.reading.confidence < Tuning.minimumConfidence
+                isUncertain: isMisplaced || hasConflict || best.reading.isAmbiguous
+                    || best.reading.confidence < Tuning.minimumConfidence,
+                isMisplaced: isMisplaced
             )
         }
 
@@ -304,6 +334,55 @@ enum CardGridRecognizer {
     }
 
     // MARK: Étapes
+
+    /// Avec cadre : place déduite de la géométrie (centre moyen de la grappe dans l'image non
+    /// redressée, rapporté au cadre), bornée et strictement croissante ; une grappe déplacée pour
+    /// respecter cet ordre a une place devinée. Sans cadre : écarts entre grappes ; place devinée
+    /// dès qu'il reste un emplacement sans indice (grille incomplète alignée à gauche / en haut).
+    private static func place(
+        columns: (ids: [Int], centers: [Double]),
+        rows: (ids: [Int], centers: [Double]),
+        centers: [Point],
+        aspect: Double,
+        region: NormalizedBox?
+    ) -> Placement {
+        if let region {
+            let columnMeans = means(of: centers.map { $0.x / aspect }, ids: columns.ids, count: columns.centers.count)
+            let rowMeans = means(of: centers.map(\.y), ids: rows.ids, count: rows.centers.count)
+            let columnPlaces = geometricSlots(
+                centers: columnMeans, origin: region.x, length: region.width, slotCount: CardGrid.columnCount
+            )
+            let rowPlaces = geometricSlots(
+                centers: rowMeans, origin: region.y, length: region.height, slotCount: CardGrid.rowCount
+            )
+            return Placement(
+                columnSlots: columnPlaces.slots,
+                rowSlots: rowPlaces.slots,
+                guessedColumns: columnPlaces.adjusted,
+                guessedRows: rowPlaces.adjusted
+            )
+        }
+        let columnSlots = slots(forCenters: columns.centers, slotCount: CardGrid.columnCount)
+        let rowSlots = slots(forCenters: rows.centers, slotCount: CardGrid.rowCount)
+        let columnsKnown = (columnSlots.last ?? 0) == CardGrid.columnCount - 1
+        let rowsKnown = (rowSlots.last ?? 0) == CardGrid.rowCount - 1
+        return Placement(
+            columnSlots: columnSlots,
+            rowSlots: rowSlots,
+            guessedColumns: columnsKnown ? [] : Set(columnSlots.indices),
+            guessedRows: rowsKnown ? [] : Set(rowSlots.indices)
+        )
+    }
+
+    private static func means(of values: [Double], ids: [Int], count: Int) -> [Double] {
+        var sums = Array(repeating: 0.0, count: count)
+        var counts = Array(repeating: 0, count: count)
+        for (index, id) in ids.enumerated() where sums.indices.contains(id) {
+            sums[id] += values[index]
+            counts[id] += 1
+        }
+        return zip(sums, counts).map { $0 / Double(max($1, 1)) }
+    }
 
     private static func parseReadings(_ observations: [CardScanObservation], aspect: Double) -> [Reading] {
         var signs: [NormalizedBox] = []
@@ -451,21 +530,32 @@ enum CardGridRecognizer {
     private static func makeResult(_ cells: [CardScanResult.Cell: CellReading]) -> CardScanResult {
         var grid = CardGrid()
         var uncertain: [CardScanResult.Cell] = []
+        var misplaced: [CardScanResult.Cell] = []
         var suggestions: [CardScanResult.Cell: Int] = [:]
         for (cell, entry) in cells {
             if entry.isUncertain {
                 uncertain.append(cell)
                 suggestions[cell] = entry.reading.value
+                if entry.isMisplaced {
+                    misplaced.append(cell)
+                }
             } else {
                 // Valeur validée par `parseCardValue` et position 0..<4 × 0..<3 : jamais d'erreur.
                 try? grid.setCard(entry.reading.value, column: cell.column, row: cell.row)
             }
         }
         uncertain.sort { ($0.column, $0.row) < ($1.column, $1.row) }
+        misplaced.sort { ($0.column, $0.row) < ($1.column, $1.row) }
         let emptyColumns = (0..<CardGrid.columnCount).filter { column in
             !cells.keys.contains { $0.column == column }
         }
-        return CardScanResult(grid: grid, uncertainCells: uncertain, suggestions: suggestions, emptyColumns: emptyColumns)
+        return CardScanResult(
+            grid: grid,
+            uncertainCells: uncertain,
+            suggestions: suggestions,
+            emptyColumns: emptyColumns,
+            misplacedCells: misplaced
+        )
     }
 
     // MARK: Outils géométriques (purs)
@@ -520,6 +610,58 @@ enum CardGridRecognizer {
             result.append(result[result.count - 1] + max(1, Int(steps)))
         }
         return result[result.count - 1] <= slotCount - 1 ? result : Array(0..<count)
+    }
+
+    /// Places déduites du cadre : grappe de centre `c` ⇒ ⌊(c − origin) / length × slotCount⌋,
+    /// bornée à 0…slotCount − 1, puis rendue strictement croissante (deux grappes ne partagent
+    /// jamais une place). `adjusted` : grappes dont la place a dû être modifiée (à vérifier).
+    static func geometricSlots(
+        centers: [Double],
+        origin: Double,
+        length: Double,
+        slotCount: Int
+    ) -> (slots: [Int], adjusted: Set<Int>) {
+        let count = centers.count
+        guard count > 0, slotCount > 0 else { return ([], []) }
+        guard count <= slotCount, length.isFinite, length > 0, origin.isFinite else {
+            let sequential = (0..<count).map { min($0, slotCount - 1) }
+            return (sequential, Set(0..<count))
+        }
+        let expected = centers.map { center -> Int in
+            let relative = (center - origin) / length * Double(slotCount)
+            guard relative.isFinite else { return 0 }
+            return Int(min(max(relative, 0), Double(slotCount - 1)).rounded(.down))
+        }
+        var result = expected
+        for index in result.indices.dropFirst() {
+            result[index] = max(result[index], result[index - 1] + 1)
+        }
+        result[count - 1] = min(result[count - 1], slotCount - 1)
+        for index in stride(from: count - 2, through: 0, by: -1) {
+            result[index] = min(result[index], result[index + 1] - 1)
+        }
+        let adjusted = Set(result.indices.filter { result[$0] != expected[$0] })
+        return (result, adjusted)
+    }
+
+    /// Lectures candidates **mot par mot** d'une ligne multi-mots (« 5 6 » / « 5 9 ») : le
+    /// découpage suit la meilleure lecture ; une autre lecture n'est prise en compte que si elle
+    /// a le même nombre de mots (l'ambiguïté « 6 »/« 9 » est ainsi conservée par mot).
+    /// Renvoie une liste par mot de la meilleure lecture (dans l'ordre de `tokenRanges`).
+    static func wordCandidates(
+        _ candidates: [CardScanObservation.Candidate]
+    ) -> [[CardScanObservation.Candidate]] {
+        guard let best = candidates.first else { return [] }
+        let bestWords = tokenRanges(in: best.text).map { String(best.text[$0]) }
+        var perWord = bestWords.map { [CardScanObservation.Candidate(text: $0, confidence: best.confidence)] }
+        for candidate in candidates.dropFirst() {
+            let words = tokenRanges(in: candidate.text).map { String(candidate.text[$0]) }
+            guard words.count == bestWords.count else { continue }
+            for (index, word) in words.enumerated() {
+                perWord[index].append(CardScanObservation.Candidate(text: word, confidence: candidate.confidence))
+            }
+        }
+        return perWord
     }
 
     private static func rotate(_ point: Point, around pivot: Point, degrees: Double) -> Point {

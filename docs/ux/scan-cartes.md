@@ -13,8 +13,10 @@
    texte**, bouton « Saisir à la main » ; aucune nouvelle demande, aucune donnée modifiée.
 3. Aperçu en direct avec **cadre-guide 4 colonnes × 3 rangées** (tirets clairs sur liseré sombre), consigne « vues du
    dessus », un seul bouton **« Prendre la photo »** en bas (zone du pouce).
-4. « Lecture des cartes… » : analyse Vision **sur l'iPhone**, hors du main actor ; la session caméra est arrêtée dès la
-   photo prise (voyant éteint pendant la vérification).
+4. « Lecture des cartes… » : la session caméra est **arrêtée juste après la photo, avant l'analyse** (voyant éteint) ;
+   analyse Vision **sur l'iPhone**, hors du main actor, limitée au cadre-guide (`regionOfInterest`, avec marge) ; photo
+   ≤ 4032 px de grand côté quand l'appareil le permet. Interruption (appel, autre app) pendant l'aperçu : « Appareil
+   photo interrompu », reprise automatique à la fin (ou « Réessayer »).
 5. **Vérification** : bilan « N cartes lues sur 12 » + « K cases à vérifier » (symbole + texte), notes (case incertaine
    avec lecture probable « 6 ? », colonne vide « si elle a été retirée, touchez « Colonne retirée » », cases sans
    lecture), puis la **grille éditable** (même `CardGridEditor` : total, triplets et colonnes calculés par le Kit). Cases
@@ -37,12 +39,26 @@
   centraux / indices de coin, correction d'une rotation ≤ 20°, regroupement 1D en 4 colonnes puis 3 rangées. Une case
   est **incertaine** (laissée vide) si : confiance < 0,5, autre lecture proche (« 6 »/« 9 »), lectures contradictoires
   (doublon, indice de coin différent), signe moins lu séparément.
+- **Place des cartes** : avec le cadre-guide (cas normal), colonne = position dans le cadre (largeur / 4), rangée =
+  hauteur / 3, bornées et strictement croissantes ; une grappe déplacée pour respecter cet ordre devient « à vérifier ».
+  Sans cadre (photo non cadrée) et grille incomplète sans indice d'écart : places **devinées** ⇒ cases vides « position
+  incertaine (5 ?) » + note « Positions à vérifier ». Avec cadre, une rangée entière non lue n'empêche pas de placer les
+  autres (les rangées ne sont jamais retirées au Skyjo).
 - **Jamais automatique** : aucune colonne marquée retirée (une colonne vide est signalée), aucune validation, aucun
-  écrasement silencieux. Une colonne vide sans écart visible est placée **à droite** : sans effet sur le score
-  (seule l'appartenance verticale compte), l'utilisateur la marque « Colonne retirée ».
+  écrasement silencieux.
 - Retour haptique léger au résultat (réglage « Retours haptiques » respecté) ; aucune animation ajoutée (Reduce Motion).
 - Tests UI : `-uiTesting -scanFixture complete|partial` (Debug uniquement) injecte des observations simulées qui passent
   par le vrai `CardGridRecognizer`, sans caméra ni demande d'autorisation.
+
+## Contrôles CI liés
+
+- `check-no-network.sh` : seule `NSCameraUsageDescription` (dans `*.pbxproj` / `*.plist`) ; plists en XML UTF-8
+  uniquement (pas de bplist, UTF-16/32, entité, commentaire ni CDATA dans une clé) ; `INFOPLIST_FILE`,
+  `INFOPLIST_PREPROCESS`, `GENERATE_INFOPLIST_FILE = NO` interdits ; encodage/export d'image, presse-papiers,
+  sélecteurs système, `VisionKit`, `Speech`, `Translation`, `MLModelCollection` interdits.
+- `check-info-plist.sh <DerivedData>` : Info.plist **produit** (plutil → jq), aucune `*UsageDescription` hors caméra,
+  ni ATS, arrière-plan, Bonjour, réseau local ; texte caméra non vide.
+- `check-binary.sh` : `Photos`, `PhotosUI`, `VisionKit` liés directement ⇒ échec (Vision et AVFoundation permis).
 
 ## Limites connues (prototype)
 
@@ -50,4 +66,3 @@
   Vision sur de vraies cartes (éclairage, reflets, chiffres stylisés, indices de coin retournés), seuils `Tuning`.
 - Photo en forte perspective (cartes vues de biais) : colonnes mal séparées possibles → cases vides ou à vérifier.
 - Une ligne lue d'un bloc (« 57 ») est ignorée ; chiffres de cartes adjacentes fusionnés → cases à compléter.
-- Interruption de la caméra (appel, autre app) non gérée finement : l'aperçu se fige, « Annuler » reste disponible.

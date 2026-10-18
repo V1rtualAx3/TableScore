@@ -37,6 +37,23 @@ enum CardScanFixture: String, CaseIterable, Sendable {
         }
     }
 
+    /// Lecture simulée d'une photo portrait 3:4, grille exactement dans le cadre-guide.
+    var output: CardScanTextReader.Output {
+        CardScanTextReader.Output(
+            observations: observations,
+            imageAspectRatio: Self.aspectRatio,
+            regionOfInterest: Self.regionOfInterest
+        )
+    }
+
+    /// Cadre-guide de la photo simulée : 4 colonnes × 3 rangées centrées sur les cartes.
+    static let regionOfInterest = NormalizedBox(
+        x: (originX - columnPitch / 2) / aspectRatio,
+        y: originY - rowPitch / 2,
+        width: 4 * columnPitch / aspectRatio,
+        height: 3 * rowPitch
+    )
+
     // MARK: Disposition simulée (photo portrait 3:4, grille bien cadrée)
 
     private static let aspectRatio = 0.75

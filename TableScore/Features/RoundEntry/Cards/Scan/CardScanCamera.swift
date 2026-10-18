@@ -1,23 +1,41 @@
 import AVFoundation
 import CoreGraphics
+import Foundation
 import ImageIO
-import SwiftUI
 import UIKit
+
+/// Prise de vue utilisée par `CardScanModel` (injectable : tests sans caméra).
+protocol CardScanCapturing: AnyObject, Sendable {
+    /// Configure si besoin puis démarre l'aperçu.
+    func start() async throws
+    /// Prend une photo, gardée en mémoire uniquement.
+    func capturePhoto() async throws -> CapturedPhoto
+    /// Arrête la session (voyant éteint) et abandonne une prise de vue en cours.
+    func stop()
+    /// `true` : session interrompue (appel, autre app…) ; `false` : interruption terminée.
+    func setInterruptionHandler(_ handler: (@Sendable (Bool) -> Void)?)
+}
 
 /// Appareil photo arrière pour le prototype P2 « Scanner les cartes ».
 ///
 /// - Session `AVCaptureSession` + sortie photo **en mémoire** : aucune vidéo, aucun son, aucun
-///   fichier, aucune photothèque ; la session est arrêtée dès la photo prise (voyant éteint).
-/// - Toute manipulation de la session passe par une **file série dédiée** (jamais le main
-///   thread) : c'est ce confinement qui justifie `@unchecked Sendable`.
+///   fichier, aucune photothèque ; taille de photo limitée (≤ 4032 px si possible).
+/// - `@unchecked Sendable` : l'état mutable (`isConfigured`, `captureRotationAngle`,
+///   `pendingCapture`, `pendingCaptureID`) n'est lu et écrit **que sur `queue`** (file série) ;
+///   `interruptionHandler` est protégé par `handlerLock` ; `session`, `output` et `queue` sont des
+///   constantes. Seule exception, conforme aux exemples d'Apple : l'aperçu reçoit `session` sur
+///   le main thread (`AVCaptureVideoPreviewLayer.session`).
 /// - L'autorisation est demandée par `CardScanModel`, au premier usage seulement.
-final class CardScanCamera: NSObject, @unchecked Sendable {
+final class CardScanCamera: NSObject, @unchecked Sendable, CardScanCapturing {
     enum Failure: Error, Equatable {
         case unavailable
         case configurationFailed
         case captureFailed
         case cancelled
     }
+
+    /// Plus grand côté souhaité pour la photo (lecture de chiffres : inutile d'aller au-delà).
+    static let maximumPhotoSide = 4032
 
     /// Session partagée avec l'aperçu (`AVCaptureVideoPreviewLayer`).
     let session = AVCaptureSession()
@@ -28,6 +46,39 @@ final class CardScanCamera: NSObject, @unchecked Sendable {
     private var isConfigured = false
     private var captureRotationAngle: CGFloat = 90
     private var pendingCapture: CheckedContinuation<CapturedPhoto, any Error>?
+    /// `uniqueID` des réglages de la prise en cours : un rappel tardif d'une prise abandonnée
+    /// est ignoré.
+    private var pendingCaptureID: Int64?
+
+    private let handlerLock = NSLock()
+    private var interruptionHandler: (@Sendable (Bool) -> Void)?
+    private var observers: [any NSObjectProtocol] = []
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        let interrupted = center.addObserver(
+            forName: AVCaptureSession.wasInterruptedNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] _ in
+            self?.notifyInterruption(true)
+        }
+        let ended = center.addObserver(
+            forName: AVCaptureSession.interruptionEndedNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] _ in
+            self?.notifyInterruption(false)
+        }
+        observers = [interrupted, ended]
+    }
+
+    deinit {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
 
     /// Appareil photo arrière présent (faux sur simulateur).
     static var isHardwareAvailable: Bool {
@@ -38,7 +89,15 @@ final class CardScanCamera: NSObject, @unchecked Sendable {
         #endif
     }
 
-    /// Configure (une seule fois) puis démarre la session.
+    func setInterruptionHandler(_ handler: (@Sendable (Bool) -> Void)?) {
+        handlerLock.withLock { interruptionHandler = handler }
+    }
+
+    private func notifyInterruption(_ isInterrupted: Bool) {
+        let handler = handlerLock.withLock { interruptionHandler }
+        handler?(isInterrupted)
+    }
+
     func start() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             queue.async {
@@ -55,7 +114,6 @@ final class CardScanCamera: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Arrête la session et abandonne une prise de vue en cours.
     func stop() {
         queue.async {
             if self.session.isRunning {
@@ -63,6 +121,7 @@ final class CardScanCamera: NSObject, @unchecked Sendable {
             }
             self.pendingCapture?.resume(throwing: Failure.cancelled)
             self.pendingCapture = nil
+            self.pendingCaptureID = nil
         }
     }
 
@@ -73,21 +132,22 @@ final class CardScanCamera: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Prend une photo, gardée en mémoire uniquement.
     func capturePhoto() async throws -> CapturedPhoto {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CapturedPhoto, any Error>) in
             queue.async {
-                guard self.session.isRunning, self.pendingCapture == nil else {
+                guard self.session.isRunning, !self.session.isInterrupted, self.pendingCapture == nil else {
                     continuation.resume(throwing: Failure.captureFailed)
                     return
                 }
-                self.pendingCapture = continuation
                 if let connection = self.output.connection(with: .video),
                    connection.isVideoRotationAngleSupported(self.captureRotationAngle) {
                     connection.videoRotationAngle = self.captureRotationAngle
                 }
                 let settings = AVCapturePhotoSettings()
                 settings.photoQualityPrioritization = .balanced
+                settings.maxPhotoDimensions = self.output.maxPhotoDimensions
+                self.pendingCapture = continuation
+                self.pendingCaptureID = settings.uniqueID
                 self.output.capturePhoto(with: settings, delegate: self)
             }
         }
@@ -106,15 +166,34 @@ final class CardScanCamera: NSObject, @unchecked Sendable {
             throw Failure.configurationFailed
         }
         session.beginConfiguration()
-        defer { session.commitConfiguration() }
         session.sessionPreset = .photo
         guard session.canAddInput(input), session.canAddOutput(output) else {
+            session.commitConfiguration()
             throw Failure.configurationFailed
         }
         session.addInput(input)
         session.addOutput(output)
+        session.commitConfiguration()
         output.maxPhotoQualityPrioritization = .balanced
+        // Après validation de la configuration : format actif définitif (une taille non proposée
+        // par ce format serait refusée).
+        let supported = device.activeFormat.supportedMaxPhotoDimensions
+        let sizes = supported.map { (width: Int($0.width), height: Int($0.height)) }
+        if let index = Self.preferredPhotoDimensionsIndex(sizes, maximumSide: Self.maximumPhotoSide) {
+            output.maxPhotoDimensions = supported[index]
+        }
         isConfigured = true
+    }
+
+    /// Taille de photo retenue (pure) : la plus grande dont le plus grand côté ≤ `maximumSide`,
+    /// sinon la plus petite proposée ; `nil` si aucune.
+    static func preferredPhotoDimensionsIndex(_ sizes: [(width: Int, height: Int)], maximumSide: Int) -> Int? {
+        func area(_ index: Int) -> Int { sizes[index].width * sizes[index].height }
+        let fitting = sizes.indices.filter { max(sizes[$0].width, sizes[$0].height) <= maximumSide }
+        if let largest = fitting.max(by: { area($0) < area($1) }) {
+            return largest
+        }
+        return sizes.indices.min(by: { area($0) < area($1) })
     }
 
     /// Angle de rotation (degrés) d'une connexion de la caméra arrière pour une orientation
@@ -131,6 +210,7 @@ final class CardScanCamera: NSObject, @unchecked Sendable {
 
 extension CardScanCamera: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: (any Error)?) {
+        let captureID = photo.resolvedSettings.uniqueID
         let result: Result<CapturedPhoto, any Error>
         if error == nil, let image = photo.cgImageRepresentation() {
             let rawOrientation = photo.metadata[kCGImagePropertyOrientation as String] as? UInt32
@@ -140,50 +220,11 @@ extension CardScanCamera: AVCapturePhotoCaptureDelegate {
             result = .failure(Failure.captureFailed)
         }
         queue.async {
+            // Rappel d'une prise abandonnée (`stop`) ou inattendue : ignoré.
+            guard captureID == self.pendingCaptureID else { return }
             self.pendingCapture?.resume(with: result)
             self.pendingCapture = nil
-        }
-    }
-}
-
-/// Aperçu en direct (`AVCaptureVideoPreviewLayer`), qui suit l'orientation de l'interface et la
-/// transmet à la prise de vue.
-struct CardScanPreview: UIViewRepresentable {
-    let camera: CardScanCamera
-
-    func makeUIView(context: Context) -> PreviewView {
-        let view = PreviewView()
-        view.camera = camera
-        view.previewLayer?.session = camera.session
-        view.previewLayer?.videoGravity = .resizeAspectFill
-        view.backgroundColor = .black
-        view.isAccessibilityElement = false
-        return view
-    }
-
-    /// Nouvelle mise en page : l'angle est réappliqué si la connexion n'existait pas encore.
-    func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.setNeedsLayout()
-    }
-
-    final class PreviewView: UIView {
-        var camera: CardScanCamera?
-        private var appliedAngle: CGFloat?
-
-        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
-
-        var previewLayer: AVCaptureVideoPreviewLayer? { layer as? AVCaptureVideoPreviewLayer }
-
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            let orientation = window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
-            let angle = CardScanCamera.rotationAngle(for: orientation)
-            guard angle != appliedAngle else { return }
-            if let connection = previewLayer?.connection, connection.isVideoRotationAngleSupported(angle) {
-                connection.videoRotationAngle = angle
-                appliedAngle = angle
-            }
-            camera?.setCaptureRotationAngle(angle)
+            self.pendingCaptureID = nil
         }
     }
 }
