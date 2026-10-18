@@ -13,9 +13,11 @@ struct RoundPreviewSection: View {
             }
         } header: {
             Text("Aperçu avant enregistrement")
+                .foregroundStyle(Theme.Palette.secondaryText)
         } footer: {
             if !notes.isEmpty {
                 Text(notes.joined(separator: "\n"))
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
         }
     }
@@ -53,7 +55,7 @@ private struct RoundPreviewRow: View {
                     .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                 if line.isCloser {
                     Image(systemName: Theme.Symbol.closer)
-                        .foregroundStyle(Color.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                 }
                 Spacer(minLength: Theme.Spacing.s)
                 Text(ScoreFormat.delta(line.roundScore))
@@ -71,7 +73,7 @@ private struct RoundPreviewRow: View {
             Text(line.totalText)
                 .font(Theme.Typography.detail)
                 .monospacedDigit()
-                .foregroundStyle(Color.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
         .padding(.vertical, Theme.Spacing.xs)
         // Une seule annonce VoiceOver par joueur, sans flèche ni signe typographique ambigu.

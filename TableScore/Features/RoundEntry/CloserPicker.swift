@@ -22,9 +22,11 @@ struct CloserPicker: View {
             }
         } header: {
             Text("Qui a terminé la manche\u{202F}?")
+                .foregroundStyle(Theme.Palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         } footer: {
             Text("Choisissez une seule personne.")
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 
@@ -37,7 +39,7 @@ struct CloserPicker: View {
             HStack(spacing: Theme.Spacing.m) {
                 Image(systemName: isSelected ? Theme.Symbol.selected : "circle")
                     .font(.title3)
-                    .foregroundStyle(isSelected ? Theme.Palette.accent : Color.secondary)
+                    .foregroundStyle(isSelected ? Theme.Palette.accent : Theme.Palette.secondaryText)
                 if isAccessibilitySize {
                     // Empilé : le prénom garde toute la largeur.
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
@@ -73,6 +75,6 @@ struct CloserPicker: View {
     private var closedLabel: some View {
         Label("A terminé", systemImage: Theme.Symbol.closer)
             .font(Theme.Typography.detail)
-            .foregroundStyle(Color.secondary)
+            .foregroundStyle(Theme.Palette.secondaryText)
     }
 }

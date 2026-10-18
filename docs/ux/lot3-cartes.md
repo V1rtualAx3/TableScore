@@ -21,3 +21,5 @@
 6. **Historique** : « (cartes) » sous le prénom, VoiceOver « …, saisi en cartes » ; ligne « Voir les cartes de la
    manche N » (`history.viewCards.<index>`) → feuille en lecture seule (même présentation et disposition 2 × 2 en
    tailles d'accessibilité que l'éditeur). Corriger = toucher la manche (grille rechargée, modifiable).
+7. **Scan des cartes (prototype P2, décision utilisateur du 2026-10-18)** : bouton « Scanner les cartes » au-dessus de
+   la grille quand un appareil photo existe ; grille proposée **à vérifier** dans le même éditeur. Voir `scan-cartes.md`.

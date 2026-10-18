@@ -101,6 +101,7 @@ enum AccessibilityID {
     // Complément T0
     enum StorageError {
         static let retry = "storageError.retry"
+        static let setAside = "storageError.setAside"
     }
 
     /// Lot 3 — saisie par cartes. `position` : rang 0-based du participant ; `column` et `row`
@@ -120,5 +121,25 @@ enum AccessibilityID {
         static let valuePickerDone = "cards.valuePicker.done"
         /// Sélecteur de valeur : « Colonne N retirée » (colonne de la case courante).
         static let valuePickerRemoveColumn = "cards.valuePicker.removeColumn"
+    }
+
+    /// Prototype P2 — « Scanner les cartes » (photo analysée sur l'appareil, grille à vérifier).
+    /// `position` : rang 0-based du participant (comme `Cards`).
+    enum Scan {
+        /// Bouton « Scanner les cartes » de la grille du joueur (absent sans appareil photo).
+        static func start(position: Int) -> String { "scan.start.\(position)" }
+        /// « Annuler » de l'écran plein écran du scan.
+        static let cancel = "scan.cancel"
+        /// « Prendre la photo ».
+        static let capture = "scan.capture"
+        /// Message (autorisation refusée ou limitée, appareil indisponible, lecture impossible).
+        static let message = "scan.message"
+        /// Vérification : bilan « N cartes lues sur 12 », notes, actions.
+        static let summary = "scan.review.summary"
+        static let notes = "scan.review.notes"
+        static let use = "scan.review.use"
+        static let retake = "scan.review.retake"
+        /// Confirmation « Remplacer » (cartes déjà saisies pour ce joueur).
+        static let confirmReplace = "scan.review.confirmReplace"
     }
 }

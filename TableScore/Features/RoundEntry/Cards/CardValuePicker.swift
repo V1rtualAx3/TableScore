@@ -79,13 +79,19 @@ private struct CardValuePickerHeader: View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.s) {
             Text(verbatim: title)
                 .font(.headline)
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: Theme.Spacing.s)
-            Button("OK", action: onDone)
-                .buttonStyle(.borderless)
-                .frame(minWidth: Theme.Size.minTapTarget, minHeight: Theme.Size.minTapTarget)
-                .accessibilityIdentifier(AccessibilityID.Cards.valuePickerDone)
+            // Cadre de 44 pt **dans** le libellé (zone touchable et cadre d'accessibilité) : posé
+            // sur le bouton, il n'agrandissait que la mise en page (audit : zone touchable trop petite).
+            Button(action: onDone) {
+                Text("OK")
+                    .fontWeight(.semibold)
+                    .frame(minWidth: Theme.Size.minTapTarget, minHeight: Theme.Size.minTapTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier(AccessibilityID.Cards.valuePickerDone)
         }
     }
 }
@@ -113,21 +119,32 @@ private struct CardValuePad: View {
 
     @ViewBuilder
     private func valueButton(_ value: Int) -> some View {
-        let button = Button {
-            onPick(value)
-        } label: {
-            Text(verbatim: ScoreFormat.display(value))
-                .font(Theme.Typography.entryScore)
-                .monospacedDigit()
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, minHeight: Theme.Size.minTapTarget)
-                .contentShape(Rectangle())
-        }
         if value == currentValue {
-            button.buttonStyle(.borderedProminent)
+            Button {
+                onPick(value)
+            } label: {
+                valueLabel(value)
+                    .onAccentForeground()
+            }
+            .buttonStyle(.borderedProminent)
         } else {
-            button.buttonStyle(.bordered)
+            Button {
+                onPick(value)
+            } label: {
+                valueLabel(value)
+            }
+            .buttonStyle(.bordered)
         }
+    }
+
+    /// Valeur sur une ligne : « −2 » à « 12 » tiennent toujours dans la case (pas de troncature).
+    private func valueLabel(_ value: Int) -> some View {
+        Text(verbatim: ScoreFormat.display(value))
+            .font(Theme.Typography.entryScore)
+            .monospacedDigit()
+            .fixedSize()
+            .frame(maxWidth: .infinity, minHeight: Theme.Size.minTapTarget)
+            .contentShape(Rectangle())
     }
 }
 
@@ -168,8 +185,9 @@ private struct CardValuePickerActions: View {
             .frame(maxWidth: .infinity, minHeight: Theme.Size.minTapTarget)
         }
         .buttonStyle(.bordered)
-        .accessibilityLabel(Text(verbatim: "Retirer la colonne \(column + 1)"))
-        .accessibilityHint(Text("La colonne compte 0. Les valeurs saisies sont conservées."))
+        // Libellé = texte visible (Contrôle vocal ; audit « texte potentiellement inaccessible ») ;
+        // l'action est expliquée par l'indice.
+        .accessibilityHint(Text(verbatim: "Retire la colonne \(column + 1)\u{00A0}: elle compte 0. Les valeurs saisies sont conservées."))
         .accessibilityIdentifier(AccessibilityID.Cards.valuePickerRemoveColumn)
     }
 }

@@ -37,7 +37,7 @@ struct HistoryRoundCard: View {
                 if showsDisclosure {
                     Image(systemName: "chevron.right")
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                 }
             }
             if row.isCorrected || row.isEndingRound || row.isAfterGameEnd {
@@ -53,11 +53,11 @@ struct HistoryRoundCard: View {
         return layout {
             if row.isCorrected {
                 Label("Corrigée", systemImage: "pencil")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
             if row.isEndingRound {
                 Label("Fin de partie", systemImage: "flag.checkered.2.crossed")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
             if row.isAfterGameEnd {
                 Label {
@@ -92,7 +92,7 @@ struct HistoryRoundCard: View {
             }
             Text(verbatim: row.displayedCloserNote)
                 .font(Theme.Typography.detail)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -110,7 +110,7 @@ struct HistoryRoundCard: View {
                     Text("Total").gridColumnAlignment(.trailing)
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
             }
 
             ForEach(row.players) { player in
@@ -118,7 +118,7 @@ struct HistoryRoundCard: View {
                     playerName(player)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text(verbatim: ScoreFormat.display(player.rawScore))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Palette.secondaryText)
                     retainedScore(player)
                     Text(verbatim: total(player))
                         .fontWeight(.semibold)
@@ -165,7 +165,7 @@ struct HistoryRoundCard: View {
             if player.isCardsEntry {
                 Text("(cartes)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.Palette.secondaryText)
             }
         }
     }

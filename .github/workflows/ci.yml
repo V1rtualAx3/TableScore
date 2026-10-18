@@ -77,7 +77,7 @@ jobs:
     name: Build + tests iOS (simulateur)
     needs: package-tests
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       # Xcode 16.4 (iOS 18.5 SDK) : présent et par défaut sur l'image macos-15
       # (README actions/runner-images, image 20260824). Repli documenté dans
@@ -176,7 +176,13 @@ jobs:
         # Complète le contrôle statique (heuristique) sur le binaire réellement produit.
         run: bash scripts/ci/check-binary.sh "$RUNNER_TEMP/DerivedData"
 
+      - name: Contrôle de l'Info.plist du build Debug
+        run: bash scripts/ci/check-info-plist.sh "$RUNNER_TEMP/DerivedData"
+
       - name: Tests unitaires et UI
+        # Inclut le parcours captures + audit d'accessibilité (ScreenshotTests : clair, sombre, AX3) :
+        # un défaut d'audit fait échouer le job (les captures restent publiées).
+        id: tests
         run: |
           set -euo pipefail
           xcodebuild test-without-building \
@@ -204,8 +210,29 @@ jobs:
       - name: Inspection binaire Release zéro réseau (otool / nm)
         run: bash scripts/ci/check-binary.sh "$RUNNER_TEMP/DerivedDataRelease"
 
+      - name: Contrôle de l'Info.plist du build Release
+        run: bash scripts/ci/check-info-plist.sh "$RUNNER_TEMP/DerivedDataRelease"
+
       - name: Aucun code de test ou de preview dans le binaire Release
         run: bash scripts/ci/check-release-symbols.sh "$RUNNER_TEMP/DerivedDataRelease"
+
+      - name: Export des captures d'écran du résultat de tests
+        # Exécuté dès que les tests ont tourné (succès OU échec), après les contrôles Release pour
+        # ne jamais les masquer. Commande : « xcrun xcresulttool export attachments --path ...
+        # --output-path ... » (Xcode 16.x), encapsulée et documentée dans le script, qui ÉCHOUE
+        # explicitement si l'export est vide ou incomplet (le code retour n'est jamais neutralisé).
+        if: ${{ !cancelled() && steps.tests.conclusion != 'skipped' }}
+        run: bash scripts/ci/export-screenshots.sh "$RUNNER_TEMP/TestResults.xcresult" "$RUNNER_TEMP/captures-ecran"
+
+      - name: Publication des captures d'écran
+        # Toujours publiée (pas seulement en échec) : revue UX clair/sombre sans Mac (CDC §11).
+        if: ${{ !cancelled() && steps.tests.conclusion != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: captures-ecran
+          path: ${{ runner.temp }}/captures-ecran
+          retention-days: 14
+          if-no-files-found: error
 
       - name: Conservation du résultat de tests en cas d'échec
         if: failure()

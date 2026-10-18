@@ -38,7 +38,9 @@ struct PlayerScoreRow: View {
     private var nameView: some View {
         Text(row.name)
             .font(Theme.Typography.playerName)
-            .lineLimit(2)
+            // Tailles d'accessibilité : prénom seul sur sa ligne, jamais tronqué (24 caractères
+            // peuvent dépasser deux lignes en AX5) ; deux lignes au plus à côté du total sinon.
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -54,7 +56,7 @@ struct PlayerScoreRow: View {
     @ViewBuilder
     private var detailItems: some View {
         Text(Self.rankText(row.rank))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.Palette.secondaryText)
         if row.isLeader {
             Label {
                 Text("En tête")
@@ -70,7 +72,7 @@ struct PlayerScoreRow: View {
         if let gap = row.gapToLeader, gap > 0 {
             Text(Self.gapText(gap))
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
     }
 

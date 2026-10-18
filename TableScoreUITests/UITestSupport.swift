@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Jeux de données de l'app (`UITestSeed`, builds Debug). Les noms doivent rester identiques
@@ -29,12 +30,14 @@ extension XCUIApplication {
 }
 
 /// Pilotage fiable d'un formulaire dont l'action principale est fixée en bas de l'écran
-/// (`primaryActionInset` : fond `.bar`, au-dessus du clavier) — saisie de manche, création de partie.
+/// (`primaryActionInset` : zone opaque sous le contenu, au-dessus du clavier) — saisie de manche,
+/// création de partie, tableau des scores.
 ///
 /// Pourquoi ne pas se fier à `isHittable` : il repose sur le test de toucher **d'accessibilité**,
 /// qui ignore le fond de la zone d'action. Un élément situé sous cette zone (ou sous le clavier)
 /// peut être déclaré « touchable » alors que le toucher réel atterrit sur la barre (constaté en
-/// CI : champ jamais focalisé, bouton « Ajouter un joueur » non touché). On vérifie donc la
+/// CI avec l'ancienne zone superposée au contenu : champ jamais focalisé, bouton « Ajouter un
+/// joueur » non touché ; une ligne à moitié visible au bord de la liste reste concernée). On vérifie donc la
 /// **géométrie** : l'élément doit être entièrement dans la bande utile, sous les barres de
 /// navigation et au-dessus de la zone d'action. Le défilement se fait par glissements courts et
 /// freinés (aucun lancer qui dépasse la cible), depuis la marge gauche du formulaire (aucune
@@ -52,8 +55,8 @@ struct FormDriver {
     var keyboardDoneButton: XCUIElement?
 
     private static let margin: CGFloat = 8
-    /// Marge intérieure verticale de `primaryActionInset` (`Theme.Spacing.m`) : le fond `.bar`
-    /// commence à cette distance au-dessus de son premier élément.
+    /// Marge intérieure verticale de `primaryActionInset` (`Theme.Spacing.m`) : la zone d'action
+    /// (et donc la fin du contenu défilant) commence à cette distance au-dessus de son premier élément.
     private static let actionAreaPadding: CGFloat = 12
     /// Repli **seulement** si aucun élément de la zone d'action n'est mesurable.
     private static let estimatedActionAreaHeight: CGFloat = 160
@@ -78,7 +81,7 @@ struct FormDriver {
         if keyboard.exists {
             bottom = min(bottom, keyboard.frame.minY - Self.keyboardToolbarHeight)
         }
-        // Haut réel de la zone d'action : le contenu défilant s'arrête au-dessus (safe area).
+        // Haut réel de la zone d'action : la zone d'action est une pile verticale opaque sous le contenu, qui s'arrête au-dessus.
         let measuredTops = ([actionButton] + actionAreaElements)
             .filter { $0.exists }
             .map { $0.frame }
@@ -259,5 +262,358 @@ struct FormDriver {
 
     private func value(of field: XCUIElement) -> String {
         (field.value as? String) ?? ""
+    }
+}
+
+// MARK: - Apparence, taille de texte et parcours d'écrans (Lot 4 : captures et audits)
+
+/// Apparence imposée au **lancement** de l'app (et non au simulateur entier : aucun état résiduel
+/// d'un test à l'autre).
+///
+/// Argument DEBUG de l'app `-uiTestingAppearance dark|light` (exige `-uiTesting`, voir
+/// `UITestAppearanceOverride` dans `TableScoreApp.swift`) : force `preferredColorScheme` à la racine
+/// et `overrideUserInterfaceStyle` sur les fenêtres. `-AppleInterfaceStyle Dark` est sans effet sur
+/// iOS et `XCUIDevice.shared.appearance` n'est volontairement pas utilisé (disponibilité non
+/// vérifiable dans le SDK de la CI, et état du simulateur modifié pour les tests suivants).
+/// `ScreenTour` vérifie en plus la luminosité réelle de la première capture : un thème non appliqué
+/// fait **échouer** le test au lieu de produire de fausses captures.
+enum UITestAppearance: CaseIterable, Sendable {
+    case light
+    case dark
+
+    var launchArguments: [String] {
+        switch self {
+        case .light: ["-uiTestingAppearance", "light"]
+        case .dark: ["-uiTestingAppearance", "dark"]
+        }
+    }
+
+    /// Suffixe des noms de captures (« 01-accueil-vide-clair »).
+    var label: String {
+        switch self {
+        case .light: "clair"
+        case .dark: "sombre"
+        }
+    }
+}
+
+/// Tailles de texte du système imposées au lancement (`extraArguments` de `launch(seed:)`).
+enum UITestTextSize {
+    /// Dynamic Type « Accessibilité 3 » (AX3, `accessibilityExtraExtraExtraLarge`), la plus grande taille.
+    static let accessibilityXXXL = [
+        "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL",
+    ]
+}
+
+/// Parcours des écrans principaux de l'app, partagé par les captures (`ScreenshotTests`) et les
+/// audits d'accessibilité (`AccessibilityAuditUITests`) : une seule navigation à maintenir.
+///
+/// À chaque écran atteint, `onScreen` reçoit son nom (« 08-saisie-manche-penalite-sombre ») ; le
+/// parcours n'impose aucune assertion sur le contenu, mais **échoue** (`TourError`) dès qu'un écran
+/// ou un contrôle attendu n'apparaît pas. Les données viennent de `UITestSeed` : le stockage est en
+/// mémoire, chaque jeu de données impose donc un nouveau lancement (7 lancements par parcours complet).
+@MainActor
+final class ScreenTour {
+    struct TourError: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// Pause avant chaque capture : fin des transitions (push, feuilles) et des animations de liste.
+    private static let settleDelay: TimeInterval = 0.6
+
+    private let app: XCUIApplication
+    private let appearance: UITestAppearance
+    private let extraArguments: [String]
+    private let label: String
+    private let onScreen: (String) -> Void
+    private var appearanceChecked = false
+
+    /// - Parameters:
+    ///   - label: suffixe des noms (par défaut celui de l'apparence ; « ax3 » pour la passe Dynamic Type).
+    init(
+        app: XCUIApplication,
+        appearance: UITestAppearance,
+        extraArguments: [String] = [],
+        label: String? = nil,
+        onScreen: @escaping (String) -> Void
+    ) {
+        self.app = app
+        self.appearance = appearance
+        self.extraArguments = extraArguments
+        self.label = label ?? appearance.label
+        self.onScreen = onScreen
+    }
+
+    // MARK: Parcours
+
+    /// 15 écrans, 7 lancements : accueil vide, création, règles, paramètres ; accueil avec reprise,
+    /// tableau 8 joueurs (haut puis bas) ; saisie avec aperçu de pénalité ; historique, parties
+    /// terminées ; fin de partie à co-vainqueurs ; consultation des cartes, saisie par cartes, sélecteur ; vérification du scan.
+    func runFullTour() throws {
+        // Lancement 1 : stockage vide.
+        launch(nil)
+        try require(element("home.newGame"), "accueil (« Nouvelle partie »)")
+        stop(1, "accueil-vide")
+        try tap("home.newGame", "« Nouvelle partie »")
+        try require(app.textFields["setup.player.1"], "formulaire de création (prénom du joueur 1)")
+        stop(2, "creation-partie")
+        try tap("setup.cancel", "« Annuler » de la création")
+        try require(element("home.rules"), "retour à l'accueil")
+        try tap("home.rules", "accès aux règles")
+        try require(app.navigationBars["Règles de comptage"], "écran des règles")
+        stop(3, "regles")
+        try goBack()
+        try tap("home.settings", "accès aux paramètres")
+        try require(element("settings.haptics"), "écran des paramètres")
+        stop(4, "parametres")
+
+        // Lancement 2 : 8 joueurs, 2 manches.
+        launch(.eightPlayers)
+        try require(element("home.resume"), "accueil avec « Reprendre la partie »")
+        stop(5, "accueil-reprise")
+        try tap("home.resume", "« Reprendre la partie »")
+        try require(element("game.addRound"), "tableau des scores à 8 joueurs")
+        stop(6, "tableau-8-joueurs")
+        // Bas du tableau par glissements freinés (lien « Historique » au-dessus de la zone d'action),
+        // puis attente de l'arrêt complet : `swipeUp()` lançait un défilement inertiel encore en
+        // mouvement pendant l'audit (cadres décalés par rapport à l'image analysée : faux « Contrast
+        // failed » sur des prénoms en plein écran, écran 07 clair).
+        let historyLink = app.buttons["game.historyLink"]
+        FormDriver(app: app, actionButton: app.buttons["game.addRound"]).bringIntoView(historyLink)
+        waitUntilStill(historyLink)
+        stop(7, "tableau-8-joueurs-suite")
+
+        // Lancement 3 : saisie d'une manche avec aperçu de la pénalité (10 / 24 / 10, Alice clôture :
+        // égalité avec Chloé, donc score doublé à 20).
+        launch(.nearEnd)
+        try openRoundEntry()
+        let form = roundForm
+        form.type("10", into: app.textFields["round.score.0"])
+        form.type("24", into: app.textFields["round.score.1"])
+        form.type("10", into: app.textFields["round.score.2"])
+        form.tap(app.buttons["round.closer.0"])
+        form.dismissKeyboard()
+        form.bringIntoView(element("round.preview.0"))
+        stop(8, "saisie-manche-penalite")
+
+        // Lancement 4 : partie active de 4 joueurs et deux parties closes.
+        launch(.withHistory)
+        try tap("home.resume", "« Reprendre la partie »", waiting: "accueil avec reprise")
+        try require(element("game.addRound"), "tableau des scores")
+        try openHistoryFromBoard()
+        stop(9, "historique")
+        try goBack()
+        try require(element("game.addRound"), "retour au tableau")
+        try goBack()
+        try tap("home.finishedGames", "accès aux parties terminées")
+        try require(element("finishedGames.game.0"), "liste des parties terminées")
+        stop(10, "parties-terminees")
+
+        // Lancement 5 : fin de partie, co-vainqueurs Bob et Chloé.
+        launch(.tieEnd)
+        try tap("home.resume", "« Reprendre la partie »", waiting: "accueil avec reprise")
+        try require(element("gameOver.winners"), "écran de fin de partie (vainqueurs)")
+        stop(11, "fin-de-partie-co-vainqueurs")
+
+        // Lancement 6 : manche saisie en cartes (Alice, total 6).
+        launch(.withCards)
+        try tap("home.resume", "« Reprendre la partie »", waiting: "accueil avec reprise")
+        try require(element("game.addRound"), "tableau des scores")
+        try openHistoryFromBoard()
+        try tap("history.viewCards.1", "« Voir les cartes de la manche 1 »")
+        let cardsSheet = app.navigationBars["Cartes · manche 1"]
+        try require(cardsSheet, "consultation des cartes de la manche 1")
+        stop(12, "cartes-consultation")
+        cardsSheet.buttons["OK"].tap()
+        guard cardsSheet.waitForNonExistence(timeout: 5) else {
+            throw TourError(description: "La consultation des cartes ne s'est pas fermée.")
+        }
+        try tap("history.round.1", "ligne de la manche 1 (correction)")
+        try require(app.buttons["round.save"], "feuille de correction de la manche 1")
+        stop(13, "saisie-par-cartes")
+        roundForm.tap(app.buttons["cards.cell.0.0.0"])
+        try require(app.buttons["cards.valuePicker.0"], "sélecteur de valeur des cartes")
+        stop(14, "selecteur-valeur-cartes")
+
+        // Lancement 7 : vérification d'un scan simulé (8 cartes lues, 1 case à vérifier). Le résultat
+        // de lecture vient de `-scanFixture partial` (builds Debug, sans caméra ni autorisation).
+        launch(.nearEnd, additionalArguments: ["-scanFixture", "partial"])
+        try openRoundEntry()
+        let cardsSegment = app.segmentedControls["round.inputMethod.0"].buttons["Cartes"]
+        try require(cardsSegment, "segment « Cartes » du joueur 1")
+        roundForm.tap(cardsSegment)
+        try require(app.buttons["scan.start.0"], "bouton « Scanner les cartes » (fixture de scan)")
+        roundForm.tap(app.buttons["scan.start.0"])
+        try require(element("scan.review.summary"), "écran de vérification du scan")
+        stop(15, "verification-scan")
+    }
+
+    /// Passe Dynamic Type (à lancer avec `UITestTextSize.accessibilityXXXL`) : création, tableau
+    /// à 8 joueurs et saisie de manche, les écrans où les actions principales risquent d'être tronquées.
+    func runLargeTextTour() throws {
+        launch(nil)
+        try require(element("home.newGame"), "accueil (« Nouvelle partie »)")
+        stop(1, "accueil-vide")
+        try tap("home.newGame", "« Nouvelle partie »")
+        try require(app.textFields["setup.player.1"], "formulaire de création (prénom du joueur 1)")
+        stop(2, "creation-partie")
+
+        launch(.eightPlayers)
+        try tap("home.resume", "« Reprendre la partie »", waiting: "accueil avec reprise")
+        try require(element("game.addRound"), "tableau des scores à 8 joueurs")
+        stop(3, "tableau-8-joueurs")
+
+        launch(.nearEnd)
+        try openRoundEntry()
+        stop(4, "saisie-manche")
+    }
+
+    // MARK: Navigation
+
+    private func element(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any)[identifier].firstMatch
+    }
+
+    /// Relance l'app (terminée si besoin) avec l'apparence, la taille de texte et le jeu de données.
+    private func launch(_ seed: SeedScenario?, additionalArguments: [String] = []) {
+        if app.state != .notRunning {
+            app.terminate()
+        }
+        app.launch(
+            seed: seed,
+            extraArguments: appearance.launchArguments + extraArguments + additionalArguments
+        )
+    }
+
+    @discardableResult
+    private func require(
+        _ target: XCUIElement,
+        _ description: String,
+        timeout: TimeInterval = 15
+    ) throws -> XCUIElement {
+        guard target.waitForExistence(timeout: timeout) else {
+            throw TourError(description: "Écran ou contrôle attendu absent : \(description).")
+        }
+        return target
+    }
+
+    /// Touche l'élément d'identifiant donné ; `waiting` : attend d'abord un élément précis (accueil).
+    private func tap(_ identifier: String, _ description: String, waiting: String? = nil) throws {
+        try require(element(identifier), waiting ?? description).tap()
+    }
+
+    private func goBack() throws {
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        try require(back, "bouton de retour de la barre de navigation", timeout: 5)
+        back.tap()
+    }
+
+    private func openRoundEntry() throws {
+        try tap("home.resume", "« Reprendre la partie »", waiting: "accueil avec reprise")
+        try tap("game.addRound", "« Ajouter une manche »")
+        try require(app.buttons["round.save"], "feuille de saisie de manche (« Enregistrer »)")
+    }
+
+    /// Tableau → lien « Historique » (au bas de la liste) → écran « Historique ».
+    private func openHistoryFromBoard() throws {
+        let link = app.buttons["game.historyLink"]
+        for _ in 0..<6 where !(link.exists && link.isHittable) {
+            app.swipeUp()
+        }
+        try require(link, "lien vers l'historique", timeout: 10).tap()
+        try require(app.navigationBars["Historique"], "écran « Historique »")
+    }
+
+    private var roundForm: FormDriver {
+        FormDriver(
+            app: app,
+            actionButton: app.buttons["round.save"],
+            actionAreaElements: [
+                element("round.blockingReasons"),
+                element("round.closerPreview"),
+            ],
+            keyboardDoneButton: app.buttons["round.keyboardDone"]
+        )
+    }
+
+    // MARK: Étapes
+
+    private func stop(_ number: Int, _ slug: String) {
+        Thread.sleep(forTimeInterval: Self.settleDelay)
+        let name = String(format: "%02d", number) + "-\(slug)-\(label)"
+        if !appearanceChecked {
+            appearanceChecked = true
+            checkAppearanceIsApplied(on: name)
+        }
+        onScreen(name)
+    }
+
+    /// Attend qu'un élément ne bouge plus (fin d'un défilement) : deux mesures identiques à 0,25 s
+    /// d'intervalle, 3 s au plus. L'audit analyse une image : un contenu encore en mouvement décale
+    /// les cadres des éléments par rapport aux pixels.
+    private func waitUntilStill(_ element: XCUIElement, timeout: TimeInterval = 3) {
+        guard element.exists else { return }
+        var previous = element.frame
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            guard element.exists else { return }
+            let current = element.frame
+            if current == previous { return }
+            previous = current
+        }
+    }
+
+    /// Luminance moyenne de l'écran : sombre < 0,45 ; clair > 0,55. Garde-fou contre un thème non
+    /// appliqué (captures « sombres » en réalité claires, audit de contraste sur le mauvais thème).
+    private func checkAppearanceIsApplied(on name: String) {
+        guard let cgImage = app.screenshot().image.cgImage,
+              let luminance = Self.meanLuminance(of: cgImage) else {
+            XCTFail("Capture illisible : apparence non vérifiable (\(name)).")
+            return
+        }
+        switch appearance {
+        case .dark:
+            XCTAssertLessThan(
+                luminance, 0.45,
+                "Thème sombre non appliqué (luminance moyenne \(luminance)) ; vérifier -uiTestingAppearance."
+            )
+        case .light:
+            XCTAssertGreaterThan(
+                luminance, 0.55,
+                "Thème clair non appliqué (luminance moyenne \(luminance))."
+            )
+        }
+    }
+
+    /// Luminance relative moyenne (0 noir, 1 blanc) sur une réduction 16 × 16.
+    private static func meanLuminance(of image: CGImage) -> Double? {
+        let side = 16
+        let bytesPerRow = side * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * side)
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: side,
+                height: side,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn else { return nil }
+        var total = 0.0
+        for offset in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Double(pixels[offset])
+            let green = Double(pixels[offset + 1])
+            let blue = Double(pixels[offset + 2])
+            total += (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255
+        }
+        return total / Double(side * side)
     }
 }

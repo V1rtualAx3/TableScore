@@ -33,6 +33,7 @@ struct PrimaryActionButton: View {
                 Text(isLoading ? loadingTitle : title)
             }
             .frame(maxWidth: .infinity)
+            .onAccentForeground()
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
@@ -40,18 +41,59 @@ struct PrimaryActionButton: View {
     }
 }
 
+/// Libellé d'un bouton `.borderedProminent` : `Theme.Palette.onAccent` (blanc en clair, noir en
+/// sombre, où la teinte est claire), tant que le bouton est actif ; désactivé, le style système
+/// garde son propre rendu. À appliquer **dans** le libellé du bouton (l'environnement `isEnabled`
+/// y reflète `.disabled(...)` posé sur le bouton, et le style ne peut pas l'écraser).
+private struct OnAccentForeground: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.foregroundStyle(Theme.Palette.onAccent)
+        } else {
+            content
+        }
+    }
+}
+
 extension View {
+    /// Couleur du libellé d'un bouton `.borderedProminent` (voir `OnAccentForeground`).
+    func onAccentForeground() -> some View {
+        modifier(OnAccentForeground())
+    }
+
     /// Zone d'action fixée en bas de l'écran, à portée de pouce, au-dessus du clavier
     /// (safe area clavier respectée : ne pas combiner avec `.ignoresSafeArea(.keyboard)`).
-    /// Le matériau `.bar` ne sert qu'à séparer l'action du contenu qui défile.
-    func primaryActionInset<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: Theme.Spacing.s) {
-                content()
+    ///
+    /// Zone **opaque, placée sous** le contenu défilant (pile verticale), jamais superposée à lui
+    /// (l'ancien `safeAreaInset` + matériau `.bar` laissait défiler le contenu derrière l'action) :
+    /// aucun texte flouté sous un fond translucide (illisible, signalé « Contrast failed » par
+    /// l'audit sur les écrans 06, 08, 13 et 15, probablement 02 clavier ouvert) ni bouton à fond translucide
+    /// posé sur un matériau (« Nouvelle partie », « Reprendre la photo »). Pas d'effet de verre
+    /// (docs 03). Fond `surface` (blanc en clair, gris foncé en sombre, comme une barre d'outils)
+    /// prolongé sous l'indicateur d'accueil ; filet de séparation en haut. La liste ou le
+    /// défilement s'arrête au-dessus de la zone : sa dernière ligne reste atteignable.
+    ///
+    /// `isPresented` à `false` : ni séparateur ni bande vide (écran sans action pour l'instant).
+    func primaryActionInset<Content: View>(
+        isPresented: Bool = true,
+        @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        let actions = content()
+        return VStack(spacing: 0) {
+            self
+            if isPresented {
+                Divider()
+                VStack(spacing: Theme.Spacing.s) {
+                    actions
+                }
+                .padding(.horizontal, Theme.Spacing.l)
+                .padding(.vertical, Theme.Spacing.m)
+                .frame(maxWidth: .infinity)
+                .background(Theme.Palette.surface)
             }
-            .padding(.horizontal, Theme.Spacing.l)
-            .padding(.vertical, Theme.Spacing.m)
-            .background(.bar)
         }
     }
 }

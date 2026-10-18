@@ -97,8 +97,10 @@ private struct HistoryContent: View {
             } description: {
                 Text(verbatim: loadError)
             } actions: {
-                Button("Réessayer") {
+                Button {
                     model.load()
+                } label: {
+                    Text("Réessayer").onAccentForeground()
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -140,6 +142,8 @@ private struct HistoryContent: View {
                 Text(verbatim: model.lifecycleNote
                     ?? "Touchez une manche pour la corriger. Les manches suivantes seront recalculées.")
                     .textCase(nil)
+                    .foregroundStyle(Theme.Palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .listStyle(.insetGrouped)
@@ -166,7 +170,9 @@ private struct HistoryContent: View {
         Button(role: .destructive) {
             isConfirmingDeletion = true
         } label: {
+            // Rouge système ≈ 3,6:1 en clair : rouge contrasté du thème (texte et symbole).
             Label("Supprimer la dernière manche", systemImage: "trash")
+                .foregroundStyle(Theme.Palette.destructive)
         }
         .accessibilityIdentifier(AccessibilityID.History.deleteLastRound)
     }
@@ -293,6 +299,7 @@ private struct InconsistencyNoticeView: View {
                 // Style explicite : seul le bouton est actif, pas toute la ligne de la liste.
                 Button(role: .destructive, action: onResolve) {
                     Text(verbatim: notice.actionTitle)
+                        .foregroundStyle(Theme.Palette.destructive)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -337,11 +344,13 @@ private struct UndoDeletionBanner: View {
     }
 
     private var undoButton: some View {
-        Button("Annuler", action: onUndo)
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .accessibilityLabel("Annuler la suppression")
-            .accessibilityIdentifier(AccessibilityID.History.undoDeletion)
+        Button(action: onUndo) {
+            Text("Annuler").onAccentForeground()
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .accessibilityLabel("Annuler la suppression")
+        .accessibilityIdentifier(AccessibilityID.History.undoDeletion)
     }
 }
 

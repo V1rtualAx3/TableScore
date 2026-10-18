@@ -7,7 +7,8 @@
 # Cibles : exécutable principal et dylib de premier niveau de TableScore.app (comme check-binary.sh).
 # Sorties inspectées : `nm` (symboles, y compris locaux) et `strings -a` (chaînes littérales).
 #  - BLOQUANTS : UITestSeed, previewEnvironment, simulatesWriteFailure, uiTestingPersistentStore,
-#    resetUITestStore, InMemoryGameRepository (tout cela doit être sous `#if DEBUG`).
+#    resetUITestStore, InMemoryGameRepository, CardScanFixture, scanFixture, uiTestingAppearance,
+#    UITestAppearanceOverride (tout cela doit être sous `#if DEBUG`).
 # Variables NM / STRINGS permettent de substituer les outils (tests de la logique hors macOS).
 set -euo pipefail
 
@@ -16,7 +17,7 @@ nm_bin="${NM:-nm}"
 strings_bin="${STRINGS:-strings}"
 products="$dd/Build/Products"
 
-blocking=(UITestSeed previewEnvironment simulatesWriteFailure uiTestingPersistentStore resetUITestStore InMemoryGameRepository)
+blocking=(UITestSeed previewEnvironment simulatesWriteFailure uiTestingPersistentStore resetUITestStore InMemoryGameRepository CardScanFixture scanFixture uiTestingAppearance UITestAppearanceOverride)
 
 apps=()
 while IFS= read -r -d '' a; do apps+=("$a"); done < <(find "$products" -type d -name 'TableScore.app' -print0 2>/dev/null)

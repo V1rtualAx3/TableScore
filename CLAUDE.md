@@ -17,6 +17,8 @@ aucun jeu de cartes numérique. Respecte les règles et priorités P0/P1/P2 du c
 **Interdictions :** aucune API, requête réseau, publicité, télémétrie, SDK analytics, connexion utilisateur, CloudKit,
 WebView, permission inutile ou dépendance externe injustifiée dans l'app. Les connexions de GitHub Actions pendant le
 développement sont distinctes du trafic de l'app.
+**Exception unique** (décision utilisateur du 2026-10-18, cahier §2) : permission **appareil photo** du prototype P2
+« Scanner les cartes » ; image analysée sur l'iPhone (Vision), ni conservée ni transmise. Toute autre permission reste interdite.
 
 ## 2. Routage impératif des modèles 5.5
 

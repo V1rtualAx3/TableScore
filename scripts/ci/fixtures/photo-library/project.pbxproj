@@ -1,0 +1,2 @@
+				INFOPLIST_KEY_NSCameraUsageDescription = "ok";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "x";

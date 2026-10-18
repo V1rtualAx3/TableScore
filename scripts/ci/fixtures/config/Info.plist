@@ -1,4 +1,4 @@
-<key>NSCameraUsageDescription</key>
+<key>NSLocationWhenInUseUsageDescription</key>
 <key>NSBonjourServices</key>
 <key>NSAppTransportSecurity</key>
 <key>UIBackgroundModes</key>

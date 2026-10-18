@@ -47,7 +47,7 @@ private struct HomeScreen: View {
         .task(id: router.dataRevision) {
             model.load()
         }
-        .primaryActionInset {
+        .primaryActionInset(isPresented: hasActions) {
             actions
         }
         .confirmationDialog(
@@ -95,7 +95,7 @@ private struct HomeScreen: View {
     private var tagline: some View {
         Text("Les scores de votre partie, sans papier ni crayon.")
             .font(.title3)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.Palette.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -108,7 +108,7 @@ private struct HomeScreen: View {
                 Text("Partie terminée\u{00A0}: résultat à consulter")
             }
             Text(HomeModel.lastSavedText(updatedAt: summary.updatedAt))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Palette.secondaryText)
         }
         .font(Theme.Typography.detail)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -118,6 +118,14 @@ private struct HomeScreen: View {
     }
 
     // MARK: Actions
+
+    /// Zone d'action affichée uniquement quand une action existe (ni au chargement, ni en échec).
+    private var hasActions: Bool {
+        switch model.state {
+        case .active, .empty: true
+        case .loading, .failed: false
+        }
+    }
 
     @ViewBuilder
     private var actions: some View {

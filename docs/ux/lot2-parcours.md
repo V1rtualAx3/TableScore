@@ -84,22 +84,27 @@ TableScoreApp
   message sous la ligne « Deux joueurs s'appellent “Alex” : ajoutez une initiale. » et `Commencer` désactivé.
 - Section « Règles » : ligne fixe « Skyjo classique · 100 points » ; `DisclosureGroup("Règles maison")` contenant
   `Stepper` « Fin de partie à 100 points » (pas de 10, 50…500). Pas d'autre variante au Lot 2.
-- CTA : `safeAreaInset(edge: .bottom)` bouton pleine largeur « Commencer » ; actif si ≥ 2 noms valides (non vides après
+- CTA : zone d'action fixe en bas (`primaryActionInset`, voir §2.3) bouton pleine largeur « Commencer » ; actif si ≥ 2 noms valides (non vides après
   trim, ≤ 24 caractères, sans doublon) ; lignes vides ignorées. Toolbar : « Annuler » (confirmation seulement si saisie).
 
 ### 2.3 Partie en cours — CTA : « Ajouter une manche »
 
-- Toolbar : titre « Manche 4 » (= manches jouées + 1), sous-titre « 4 joueurs » ; `Menu` (`ellipsis.circle`, label
-  « Options de la partie ») : Historique, Règles de comptage, Abandonner la partie.
-- Corps : `ScrollView` + `LazyVStack` de `PlayerScoreRow` **dans l'ordre de `displayOrder`** (jamais retrié) :
-  nom (`.title3`, `lineLimit(2)`), rang « 1er », total (`.system(.largeTitle, design: .rounded).monospacedDigit()`),
-  badge « En tête » (`crown.fill` + texte) pour **tous** les leaders ; écart « +12 » vs leader en `.secondary`.
+- Toolbar : titre **système** « Manche 4 · 4 joueurs » (= manches jouées + 1, puis nombre de joueurs ; iOS 18 n'a pas
+  de sous-titre de barre natif, et un titre composé dans `ToolbarItem(.principal)` reste plafonné en Dynamic Type sans
+  Grand contenu) ; `Menu` (`ellipsis.circle`, label « Options de la partie ») : Historique, Règles de comptage,
+  Abandonner la partie.
+- Corps : `ScrollView` + `VStack` (non paresseuse : 8 joueurs au plus) de `PlayerScoreRow` **dans l'ordre de
+  `displayOrder`** (jamais retrié) : nom (`.title3`, 2 lignes au plus, sans limite en tailles d'accessibilité), rang
+  « 1er », total (`.largeTitle.monospacedDigit()` bold),
+  badge « En tête » (`crown.fill` + texte) pour **tous** les leaders ; écart « +12 » vs leader en `Theme.Palette.secondaryText`.
 - Section repliée « Classement » triée (optionnelle, `DisclosureGroup`) ; section « Manches » : lien « Historique (3 manches) ».
 - Bannière post-enregistrement (`RoundBanner`, 4 s, non bloquante, rejouable via Historique) : « Manche 3 enregistrée » +
   pour le clôturant doublé « Alice : score doublé (10 → 20) ». Annonce VoiceOver via `AccessibilityNotification.Announcement`.
 - Animation des totaux : `.contentTransition(.numericText(value:))` ; désactivée si `accessibilityReduceMotion`.
-- CTA : `safeAreaInset(edge: .bottom)` « Ajouter une manche » pleine largeur, `.borderedProminent`, hauteur ≥ 50 pt,
-  matériau `.bar` derrière le bouton uniquement pour séparer du défilement.
+- CTA : zone d'action fixe en bas (`primaryActionInset`) « Ajouter une manche » pleine largeur, `.borderedProminent`,
+  hauteur ≥ 50 pt. Zone **opaque** (`Theme.Palette.surface`, filet de séparation en haut) placée **sous** le contenu
+  défilant, jamais superposée : pas de matériau translucide (texte flouté derrière le bouton, contraste illisible
+  signalé par l'audit d'accessibilité ; pas d'effet de verre, docs 03).
 - 8 joueurs / XXL : une ligne par joueur, défilement vertical ; en `dynamicTypeSize.isAccessibilitySize`, la ligne passe
   en `VStack` (nom au-dessus, total dessous) — pas de `minimumScaleFactor` sur le total sous 0.8.
 - État vide (0 manche) : texte « Aucune manche pour l'instant. Les totaux apparaîtront ici. » ; tous les totaux à « 0 ».
@@ -139,7 +144,7 @@ TableScoreApp
 - **Section « Aperçu »** (visible dès que le brouillon est complet) : une ligne par joueur
   « Alice  +10 → 84 » ; pour le clôturant, libellé exact fourni par le Kit (cf. §3.2), badge « ×2 » + texte.
   Si incomplet : « Complétez : score de Bob, clôturant. » (liste des `blockingReasons`).
-- CTA `safeAreaInset(edge: .bottom)` : reste au-dessus du clavier (comportement par défaut de la safe area clavier ;
+- CTA dans la zone d'action fixe (`primaryActionInset`, §2.3) : reste au-dessus du clavier (comportement par défaut de la safe area clavier ;
   **ne pas** utiliser `.ignoresSafeArea(.keyboard)`). Désactivé tant que `blockingReasons` non vide ; libellé
   « Enregistrer la manche » ; pendant `isSaving` : `ProgressView` + « Enregistrement… », bouton désactivé.
 - Après succès : haptique `.success`, `dismiss()`, bannière sur `GameView`. Échec : alerte « Enregistrement impossible »,
@@ -222,16 +227,21 @@ pour les deltas ; VoiceOver lit « moins » (vérifier en test, sinon fournir `a
 
 | Token | Valeur | Toujours doublé par |
 |---|---|---|
-| `accent` | `AccentColor` (asset clair/sombre, bleu-vert calme, contraste ≥ 4.5:1 sur fond) | libellé du bouton |
-| `leader` | `.green` système | « En tête » + `crown.fill` |
-| `doubled` | `.orange` système | « ×2 Doublé » + `multiply.circle.fill` |
-| `warning` | `.yellow`/`.orange` adaptatif | texte + `exclamationmark.triangle.fill` |
+| `accent` | `AccentColor` : clair `#1A626A`, sombre `#58BEC9` (texte ≥ 4,8:1 sur tous les fonds) | libellé du bouton |
+| `onAccent` | blanc (clair, 7,0:1) / noir (sombre, ≈ 9,6:1) : libellé des boutons proéminents | — |
+| `secondaryText` | `#5C5C61` / `#AEAEB2` (contraste accru : `#3A3A3C` / `#D1D1D6`), ≥ 4,8:1 | — |
+| `leader` | vert `#18692C` / `#30D158` | « En tête » + `crown.fill` |
+| `doubled`, `warning` | orange `#9C4500` / `#FF9F0A` | « ×2 Doublé » + `multiply.circle.fill` ; texte + `exclamationmark.triangle.fill` |
+| `destructive` | rouge `#B3261E` / `#FF6961` (actions destructives affichées dans l'écran) | texte explicite |
 | Fond | `Color(.systemGroupedBackground)` ; surfaces `secondarySystemGroupedBackground` | — |
 
-- Couleurs système uniquement (adaptent clair/sombre/contraste accru) ; pas de dégradé, pas d'ombres, matériaux
-  seulement sous le CTA fixe.
-- Typo : totaux `.largeTitle` rounded `.monospacedDigit()` bold ; scores de saisie `.title2.monospacedDigit()` ; noms
-  `.title3` ; détails `.subheadline` `.secondary`. Uniquement des styles Dynamic Type (pas de tailles fixes).
+- Contraste ≥ 4,5:1 pour tout texte, clair et sombre (audit `performAccessibilityAudit`) : les couleurs système
+  `.secondary`, `.tertiary`, `.orange`, `.green`, `.red` ne servent jamais de couleur de texte (≈ 2–3,4:1 en clair) ;
+  en-têtes et pieds de sections et textes d'attente des champs reçoivent `secondaryText`. Pas de dégradé, pas
+  d'ombres ; zone du CTA fixe opaque (`surface`), sans matériau translucide. Restent translucides : le bandeau
+  « Annuler la suppression » de l'historique (temporaire) et la barre de capture du scan, posée sur l'aperçu caméra.
+- Typo : totaux `.largeTitle` `.monospacedDigit()` bold ; scores de saisie `.title2.monospacedDigit()` ; noms
+  `.title3` ; détails `.subheadline` `secondaryText`. Uniquement des styles Dynamic Type (pas de tailles fixes).
 - Espacements : constantes `4, 8, 12, 16, 24` ; rayons `12` (lignes), `16` (cartes). Cible tactile ≥ 44 pt.
 - Haptique : `.sensoryFeedback(.success, trigger:)` à l'enregistrement et à la fin de partie ; `.selection` au choix
   du clôturant ; `.warning` sur incohérence. Respect du réglage « Retours haptiques ». Rien d'autre.
