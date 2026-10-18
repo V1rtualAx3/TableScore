@@ -741,5 +741,60 @@ struct HistoryModelTests {
         #expect(repository.writeCount == 0)
         #expect(repository.stored.rounds.count == 4)
     }
+
+    // MARK: Saisie par cartes (Lot 3)
+
+    /// Grille d'Alice du jeu `withCards` : 7/7/7, 1/2/3, colonne retirée, −2/−2/−2 ⇒ 6.
+    private static func withCardsAliceGrid() throws -> CardGrid {
+        try CardGrid(rows: [[7, 1, nil, -2], [7, 2, nil, -2], [7, 3, nil, -2]], removedColumns: [2])
+    }
+
+    private func cardsModel() throws -> HistoryModel {
+        let clock = HistoryTestClock()
+        let repository = InMemoryGameRepository(now: { clock.next() })
+        try UITestSeed.withCards.apply(to: repository)
+        return historyModel(repository, Key.cards.id)
+    }
+
+    @Test("Manche saisie en cartes : grille d'origine exposée, mention « cartes », scores du moteur")
+    func cardEntryIsShown() throws {
+        let model = try cardsModel()
+        let first = try row(model, index: 1)
+        let expectedGrid = try Self.withCardsAliceGrid()
+        #expect(first.players.map(\.isCardsEntry) == [true, false, false])
+        #expect(first.players[0].cardGrid == expectedGrid)
+        #expect(first.players.map(\.rawScore) == [6, 10, 4])
+        #expect(first.players.map(\.effectiveScore) == [6, 20, 4])
+        #expect(first.hasCardEntries)
+        #expect(first.cardPlayers.map(\.name) == ["Alice"])
+        #expect(first.cardsButtonTitle == "Voir les cartes de la manche 1")
+    }
+
+    @Test("Manche saisie en points : aucune grille, aucun bouton de consultation")
+    func pointsEntryHasNoGrid() throws {
+        let model = historyModel(try seededRepository(), Key.historyActive.id)
+        #expect(model.rows.allSatisfy { !$0.hasCardEntries })
+        #expect(model.rows.flatMap(\.players).allSatisfy { $0.cardGrid == nil })
+    }
+
+    @Test("VoiceOver : saisie en cartes annoncée dans la phrase de la manche")
+    func cardEntryIsSpoken() throws {
+        let label = try row(try cardsModel(), index: 1).accessibilityLabel
+        #expect(label.contains("Alice 6, saisi en cartes, total 6."))
+        #expect(label.contains("Bob 10 doublé à 20, total 20."))
+        #expect(label.contains("Chloé 4, total 4."))
+    }
+
+    @Test("Consultation d'une grille : textes de la présentation partagée avec l'éditeur (valeurs du Kit)")
+    func readOnlyGridUsesSharedPresentation() throws {
+        let model = try cardsModel()
+        let alice = try #require(try row(model, index: 1).cardPlayers.first)
+        let grid = try #require(alice.cardGrid)
+        let presentation = CardGridPresentation(grid: grid, playerName: alice.name, position: alice.position)
+        #expect(presentation.rawScore == 6)
+        #expect(presentation.totalAccessibilityLabel == "Alice, total brut 6 points")
+        #expect(presentation.columns.map(\.shortStatus) == ["Non comptée", nil, "Retirée", "Non comptée"])
+        #expect(presentation.columns.map(\.subtotalText) == ["0", "6", "0", "0"])
+    }
 }
 #endif

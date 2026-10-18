@@ -30,6 +30,17 @@ struct AppShellTests {
         #expect(AccessibilityID.GameOver.replay == "gameOver.replay")
         #expect(AccessibilityID.History.round(index: 3) == "history.round.3")
         #expect(AccessibilityID.StorageError.retry == "storageError.retry")
+        // Lot 3 (saisie par cartes)
+        #expect(AccessibilityID.Round.inputMethod(position: 2) == "round.inputMethod.2")
+        #expect(AccessibilityID.Round.cardsNotice(position: 2) == "round.cardsNotice.2")
+        #expect(AccessibilityID.History.viewCards(index: 3) == "history.viewCards.3")
+        #expect(AccessibilityID.Cards.cell(position: 1, column: 3, row: 2) == "cards.cell.1.3.2")
+        #expect(AccessibilityID.Cards.removeColumn(position: 1, column: 3) == "cards.removeColumn.1.3")
+        #expect(AccessibilityID.Cards.total(position: 1) == "cards.total.1")
+        #expect(AccessibilityID.Cards.valuePicker(value: -2) == "cards.valuePicker.-2")
+        #expect(AccessibilityID.Cards.valuePicker(value: 12) == "cards.valuePicker.12")
+        #expect(AccessibilityID.Cards.valuePickerClear == "cards.valuePicker.clear")
+        #expect(AccessibilityID.Cards.valuePickerDone == "cards.valuePicker.done")
     }
 
     // MARK: Navigation

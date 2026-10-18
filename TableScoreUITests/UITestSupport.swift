@@ -7,6 +7,7 @@ enum SeedScenario: String, CaseIterable {
     case nearEnd
     case tieEnd
     case withHistory
+    case withCards
 }
 
 extension XCUIApplication {

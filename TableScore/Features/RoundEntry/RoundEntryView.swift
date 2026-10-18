@@ -168,9 +168,9 @@ private struct RoundEntryForm: View {
                 }
         }
         .task {
-            // Ajout : le clavier s'ouvre directement sur le premier joueur.
+            // Ajout : le clavier s'ouvre directement sur le premier joueur (mode « Points » par défaut).
             if !model.isEditing, focusedField == nil {
-                focusedField = model.fields.first?.participantID
+                focusedField = model.fields.first(where: { $0.inputMethod == .points })?.participantID
             }
         }
     }
@@ -184,7 +184,7 @@ private struct RoundEntryForm: View {
             } header: {
                 Text("Points de la manche")
             } footer: {
-                Text("Score de chaque joueur, colonnes déjà retirées. «\u{00A0}±\u{00A0}» rend un score négatif.")
+                Text("Points\u{00A0}: score de chaque joueur, colonnes déjà retirées\u{00A0}; «\u{00A0}±\u{00A0}» rend un score négatif. Cartes\u{00A0}: grille finale du joueur, total calculé.")
             }
 
             CloserPicker(model: model)
@@ -436,21 +436,21 @@ private struct RoundEntryForm: View {
         }
     }
 
-    /// Champ suivant ; après le dernier joueur, ferme le clavier et montre le choix du clôturant.
+    /// Champ suivant (joueurs en mode « Points » : une grille n'a pas de champ texte) ; après le
+    /// dernier, ferme le clavier et montre le choix du clôturant.
     private func focusNextField(proxy: ScrollViewProxy) {
         let fields = model.fields
-        guard let current = focusedField,
-              let position = fields.firstIndex(where: { $0.participantID == current }),
-              position + 1 < fields.count
-        else {
-            focusedField = nil
-            let animation: Animation? = reduceMotion ? nil : .default
-            withAnimation(animation) {
-                proxy.scrollTo(CloserPicker.scrollAnchor, anchor: .top)
-            }
+        if let current = focusedField,
+           let position = fields.firstIndex(where: { $0.participantID == current }),
+           let next = fields[(position + 1)...].first(where: { $0.inputMethod == .points }) {
+            focusedField = next.participantID
             return
         }
-        focusedField = fields[position + 1].participantID
+        focusedField = nil
+        let animation: Animation? = reduceMotion ? nil : .default
+        withAnimation(animation) {
+            proxy.scrollTo(CloserPicker.scrollAnchor, anchor: .top)
+        }
     }
 
     private func finish() {
@@ -554,5 +554,13 @@ private struct BlockingSummaryLabel: View {
         mode: .edit(roundID: UITestSeed.GameKey.historyActive.roundID(index: 2))
     )
     .previewEnvironment(.withHistory)
+}
+
+#Preview("Correction d'une manche saisie en cartes") {
+    RoundEntryView(
+        gameID: UITestSeed.withCards.activeGameID,
+        mode: .edit(roundID: UITestSeed.GameKey.cards.roundID(index: 1))
+    )
+    .previewEnvironment(.withCards)
 }
 #endif

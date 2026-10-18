@@ -8,6 +8,11 @@ import TableScoreKit
 /// retenu, verdict du clôturant, cumuls et fin de partie via `ScoreEngine`. Le modèle ne garde que
 /// les textes saisis, la sélection et des états de présentation ; la source de vérité reste le dépôt.
 ///
+/// Mode « Cartes » (cahier §3.3, P1) : choisi **par joueur** (sélecteur « Points | Cartes » de sa
+/// ligne). La grille et le score « points » vivent tous deux dans le `DraftEntry` du Kit : basculer
+/// ne perd rien, le pré-remplissage cartes → points est la règle du Kit (jamais d'écrasement d'une
+/// saisie manuelle). Total de la grille, triplets et colonnes retirées : `CardGrid.evaluate()`.
+///
 /// Idempotence : l'identifiant de manche (`RoundDraft.roundID`) est fixé à l'ouverture de la
 /// feuille et réutilisé à chaque tentative ; une nouvelle tentative après un succès inaperçu
 /// donne `.alreadySaved`, traité comme un succès silencieux.
@@ -46,6 +51,11 @@ final class RoundEntryModel {
         let name: String
         var text: String
         var status: FieldStatus
+        /// Mode de saisie du joueur (reflet de `DraftEntry.inputMethod`, mis à jour avec lui).
+        var inputMethod: InputMethod = .points
+        /// Information affichée après une bascule cartes → points (grille incomplète, ou total des
+        /// cartes différent d'un score saisi à la main et conservé). Jamais bloquante, rien n'est effacé.
+        var cardsNotice: String?
 
         var id: UUID { participantID }
 
@@ -55,8 +65,9 @@ final class RoundEntryModel {
             return RoundEntryModel.minusSigns.contains(first)
         }
 
-        /// Message affiché sous le champ (erreur ou avertissement).
+        /// Message affiché sous le champ (erreur ou avertissement) ; mode « points » seulement.
         var message: String? {
+            guard inputMethod == .points else { return nil }
             switch status {
             case .invalid:
                 "Nombre entier attendu"
@@ -69,7 +80,7 @@ final class RoundEntryModel {
             }
         }
 
-        var isError: Bool { status == .invalid }
+        var isError: Bool { inputMethod == .points && status == .invalid }
 
         /// Valeur VoiceOver du champ : « vide », « moins 3 »…
         var spokenValue: String {
@@ -237,6 +248,8 @@ final class RoundEntryModel {
 
     private var game: SavedGame?
     private var draft: RoundDraft?
+    /// Brouillon à l'ouverture (modes et grilles initiaux, pour `isDirty`).
+    private var initialDraft: RoundDraft?
     private var initialTexts: [UUID: String] = [:]
     private var initialCloserID: UUID?
     /// Manches dont la suppression a été confirmée pour la saisie courante.
@@ -287,9 +300,22 @@ final class RoundEntryModel {
     /// la feuille ne doit pas pouvoir être fermée par glissement sans ce rétablissement.
     var needsLifecycleRestore: Bool { reopenedFinishedGame }
 
-    /// Saisie modifiée depuis l'ouverture (confirmation avant abandon).
+    /// Saisie modifiée depuis l'ouverture (confirmation avant abandon) : textes, clôturant, mode de
+    /// saisie ou grille de cartes.
     var isDirty: Bool {
-        fields.contains { $0.text != (initialTexts[$0.participantID] ?? "") } || closerID != initialCloserID
+        if closerID != initialCloserID { return true }
+        if fields.contains(where: { $0.text != (initialTexts[$0.participantID] ?? "") }) { return true }
+        guard let draft, let initialDraft else { return false }
+        return draft.participantIDs.contains { participantID in
+            let current = draft.entry(for: participantID)
+            let initial = initialDraft.entry(for: participantID)
+            return current?.inputMethod != initial?.inputMethod || current?.cardGrid != initial?.cardGrid
+        }
+    }
+
+    /// Grille de cartes du joueur (brouillon du Kit) ; grille vide si le joueur est inconnu.
+    func cardGrid(for participantID: UUID) -> CardGrid {
+        draft?.entry(for: participantID)?.cardGrid ?? CardGrid()
     }
 
     /// Recharge la partie après un échec de lecture (jamais après le chargement réussi : le
@@ -310,11 +336,55 @@ final class RoundEntryModel {
         let status = Self.status(for: text)
         fields[position].text = text
         fields[position].status = status
+        // Saisie manuelle : l'information de bascule n'a plus lieu d'être.
+        fields[position].cardsNotice = nil
         // Une entrée « cartes » corrigée à la main passe en saisie « points ».
         if draft?.entry(for: participantID)?.inputMethod != .points {
             draft?.setInputMethod(.points, for: participantID)
+            fields[position].inputMethod = .points
         }
         draft?.setPoints(status.parsedValue, for: participantID)
+        draftDidChange()
+    }
+
+    /// Sélecteur « Points | Cartes » d'un joueur. Rien n'est perdu : points et grille restent dans
+    /// le brouillon. Cartes → points : le Kit pré-remplit le score avec le total d'une grille
+    /// complète (champ vide ou déjà issu de la grille) ; sinon une information est affichée sous le
+    /// champ, sans rien effacer. Renvoie cette information (annonce VoiceOver), `nil` sinon.
+    @discardableResult
+    func setInputMethod(_ inputMethod: InputMethod, for participantID: UUID) -> String? {
+        guard !isCompleted, !isSaving,
+              let position = fields.firstIndex(where: { $0.participantID == participantID }),
+              let current = draft?.entry(for: participantID),
+              current.inputMethod != inputMethod
+        else { return nil }
+        draft?.setInputMethod(inputMethod, for: participantID)
+        fields[position].inputMethod = inputMethod
+        fields[position].cardsNotice = nil
+        if inputMethod == .points, let updated = draft?.entry(for: participantID) {
+            // Texte affiché = score du brouillon (pré-rempli par le Kit) ; une saisie manuelle,
+            // même invalide, n'est remplacée que si le Kit a effectivement pré-rempli.
+            if updated.isPointsDerivedFromGrid, let points = updated.points,
+               fields[position].status.parsedValue != points {
+                let text = ScoreFormat.display(points)
+                fields[position].text = text
+                fields[position].status = Self.status(for: text)
+            }
+            fields[position].cardsNotice = Self.cardsNotice(for: updated)
+        }
+        draftDidChange()
+        return fields[position].cardsNotice
+    }
+
+    /// Nouvelle grille d'un joueur en mode « Cartes » (liaison de `CardGridEditor`). Ignorée en
+    /// mode « Points » : la saisie points ne soustrait jamais de colonnes.
+    func setCardGrid(_ grid: CardGrid, for participantID: UUID) {
+        guard !isCompleted, !isSaving,
+              let current = draft?.entry(for: participantID),
+              current.inputMethod == .cards,
+              current.cardGrid != grid
+        else { return }
+        draft?.updateEntry(for: participantID) { $0.cardGrid = grid }
         draftDidChange()
     }
 
@@ -466,13 +536,15 @@ final class RoundEntryModel {
             )
             var newFields: [Field] = []
             for (position, participantID) in newDraft.participantIDs.enumerated() {
-                let text = newDraft.entry(for: participantID)?.rawScore.map(ScoreFormat.display) ?? ""
+                let entry = newDraft.entry(for: participantID)
+                let text = entry?.rawScore.map(ScoreFormat.display) ?? ""
                 newFields.append(Field(
                     participantID: participantID,
                     position: position,
                     name: participantsByID[participantID]?.displayName ?? "",
                     text: text,
-                    status: Self.status(for: text)
+                    status: Self.status(for: text),
+                    inputMethod: entry?.inputMethod ?? .points
                 ))
             }
             if case .edit = mode, loaded.lifecycle == .finished {
@@ -486,6 +558,7 @@ final class RoundEntryModel {
             }
             game = loaded
             draft = newDraft
+            initialDraft = newDraft
             fields = newFields
             closerID = newDraft.closingParticipantID
             initialTexts = Dictionary(
@@ -526,18 +599,27 @@ final class RoundEntryModel {
         var summaryItems: [String] = []
         let missing = Set(draft.missingScoreParticipantIDs)
         let missingFields = fields.filter { missing.contains($0.participantID) }
-        let invalidFields = missingFields.filter { $0.status == .invalid }
-        let emptyFields = missingFields.filter { $0.status != .invalid }
+        // Mode « cartes » : grille incomplète (le texte du champ points n'est pas utilisé).
+        let invalidFields = missingFields.filter { $0.inputMethod == .points && $0.status == .invalid }
+        let emptyFields = missingFields.filter { $0.inputMethod == .cards || $0.status != .invalid }
         for field in missingFields {
-            reasons.append(field.status == .invalid
-                ? "score \(VerdictText.ofName(field.name)) à corriger"
-                : "score \(VerdictText.ofName(field.name))")
+            if field.inputMethod == .cards {
+                let missingCards = draft.entry(for: field.participantID)?.cardGrid.evaluate().missingCardCount ?? 0
+                reasons.append("\(Self.cardsItem(field.name)) (\(Self.missingCardsText(missingCards)))")
+            } else if field.status == .invalid {
+                reasons.append("score \(VerdictText.ofName(field.name)) à corriger")
+            } else {
+                reasons.append("score \(VerdictText.ofName(field.name))")
+            }
         }
         // Résumé court : au-delà de deux joueurs, un décompte plutôt qu'une liste de prénoms.
         if emptyFields.count > 2 {
             summaryItems.append("\(emptyFields.count) scores")
         } else {
-            summaryItems += emptyFields.map { "score \(VerdictText.ofName($0.name))" }
+            summaryItems += emptyFields.map { (field: Field) -> String in
+                if field.inputMethod == .cards { return Self.cardsItem(field.name) }
+                return "score \(VerdictText.ofName(field.name))"
+            }
         }
         if invalidFields.count > 2 {
             summaryItems.append("\(invalidFields.count) scores à corriger")
@@ -771,6 +853,35 @@ final class RoundEntryModel {
             }
             return .invalid
         }
+    }
+
+    /// « cartes d'Alice » (raison de blocage d'une grille incomplète).
+    nonisolated static func cardsItem(_ name: String) -> String {
+        "cartes \(VerdictText.ofName(name))"
+    }
+
+    /// « 1 carte manquante », « 3 cartes manquantes ».
+    nonisolated static func missingCardsText(_ count: Int) -> String {
+        count > 1 ? "\(count) cartes manquantes" : "\(count) carte manquante"
+    }
+
+    /// Information après une bascule cartes → points (`nil` si rien à signaler) : grille jamais
+    /// touchée ⇒ rien ; grille incomplète ⇒ invitation à saisir le total ou compléter les cartes ;
+    /// total des cartes différent d'un score saisi à la main ⇒ ce score est conservé (règle du Kit).
+    nonisolated static func cardsNotice(for entry: DraftEntry) -> String? {
+        guard entry.inputMethod == .points, entry.cardGrid != CardGrid() else { return nil }
+        guard let total = entry.cardGrid.evaluate().rawScore else {
+            if entry.points == nil {
+                return "La grille est incomplète\u{00A0}: saisissez le total à la main ou complétez les cartes."
+            }
+            return "La grille est incomplète\u{00A0}: le score saisi à la main est conservé. "
+                + "Vérifiez-le ou complétez les cartes."
+        }
+        if let points = entry.points, points != total {
+            return "Total des cartes\u{00A0}: \(ScoreFormat.display(total)). Le score saisi à la main "
+                + "(\(ScoreFormat.display(points))) est conservé\u{00A0}: corrigez-le si besoin."
+        }
+        return nil
     }
 
     private static func earlyEndDecision(

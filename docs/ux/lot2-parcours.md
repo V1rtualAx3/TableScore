@@ -116,8 +116,9 @@ TableScoreApp
 
 - `NavigationStack` + `Form` ; titre « Manche 4 » ; toolbar « Annuler » (si `isDirty` : `confirmationDialog`
   « Abandonner la saisie ? » → « Abandonner » destructif / « Continuer la saisie »).
-- Sélecteur `Picker("Mode de saisie", …)` `.segmented` « Points | Cartes » : au Lot 2, « Cartes » absent (P1, Lot 3) —
-  ne pas afficher un segment inactif.
+- Sélecteur « Points | Cartes » : **livré au Lot 3, par joueur** (contrôle segmenté sous la ligne nom + score de
+  chaque joueur, `round.inputMethod.<position>`, « Points » par défaut) plutôt que global en tête de formulaire ;
+  voir `ScoreEntryRow` et `RoundEntryModel.setInputMethod` (bascules sans perte, information si grille incomplète).
 - **Section « Points de la manche »** : une ligne par joueur, ordre stable : nom, bouton de signe, champ.
 - **Décision clavier : `.keyboardType(.numberPad)` + bouton de signe par ligne.** Justification : pavé à grosses touches
   utilisable à une main et sans risque de lettres ; `.numbersAndPunctuation` a des touches petites, expose des lettres
@@ -270,5 +271,5 @@ Ordre d'intégration recommandé : T0 → (T1, T2, T3, T4, T6, T7 en parallèle)
 4. **Incohérence §4.6** : résolution obligatoire *avant* écriture (aucun état incohérent persisté) vs enregistrement
    puis bandeau persistant. Recommandé : avant écriture.
 5. Suppression limitée à la **dernière** manche (cahier §4.6) ; suppression d'une manche intermédiaire non proposée.
-6. Segment « Points | Cartes » masqué jusqu'au Lot 3.
+6. Segment « Points | Cartes » : tranché et livré au Lot 3 (sélecteur par joueur, cf. §2.4).
 7. Limite de 24 caractères par prénom et pas de 10 pour la cible « Règles maison » (choix UX, modifiables).
