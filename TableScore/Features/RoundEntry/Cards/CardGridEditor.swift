@@ -304,6 +304,10 @@ private struct CardColumnRemovalToggle: View {
     }
 }
 
+/// Sous-total d'une colonne (information, non interactive). Élément VoiceOver de type **texte**
+/// (`isStaticText`) sur toute la largeur de la colonne : regroupé sans trait, il n'avait aucun type
+/// et l'audit le traitait comme une commande (« Hit area is too small » : « Colonne 2, 6 points »,
+/// 11 × 20 pt, écrans 13 à 15).
 private struct CardColumnSubtotal: View {
     let column: CardGridPresentation.Column
 
@@ -320,8 +324,10 @@ private struct CardColumnSubtotal: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: column.subtotalAccessibilityLabel))
+        .accessibilityAddTraits(.isStaticText)
     }
 }
 

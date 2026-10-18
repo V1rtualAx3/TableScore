@@ -120,7 +120,8 @@ final class RoundEntryUITests: XCTestCase {
 /// Actions communes de la feuille de saisie (identifiants `AccessibilityID.Round.*` en littéral).
 ///
 /// Touchers et défilement via `FormDriver` : la zone d'action fixe (résumé + « Enregistrer ») et
-/// le clavier recouvrent le bas du formulaire, et `isHittable` ne le détecte pas.
+/// le clavier réduisent la partie visible du formulaire (ligne coupée au bord), et `isHittable` ne
+/// le détecte pas.
 @MainActor
 private struct RoundEntryRobot {
     let app: XCUIApplication

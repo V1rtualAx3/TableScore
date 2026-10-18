@@ -162,6 +162,13 @@ final class GameModel {
         return String(localized: "Manche \(game.computation.nextRoundIndex)")
     }
 
+    /// Titre système de la barre : « Manche 3 · 8 joueurs » pendant la partie ; `headerTitle` seul
+    /// sans partie chargée ou sur l'écran de fin (où la barre n'affiche pas de titre).
+    var navigationTitle: String {
+        guard game != nil, !showsFinalResults else { return headerTitle }
+        return headerTitle + " · " + headerSubtitle
+    }
+
     var headerSubtitle: String {
         String(localized: "\(playerCount) joueurs")
     }

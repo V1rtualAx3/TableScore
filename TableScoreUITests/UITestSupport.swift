@@ -30,12 +30,14 @@ extension XCUIApplication {
 }
 
 /// Pilotage fiable d'un formulaire dont l'action principale est fixée en bas de l'écran
-/// (`primaryActionInset` : fond `.bar`, au-dessus du clavier) — saisie de manche, création de partie.
+/// (`primaryActionInset` : zone opaque sous le contenu, au-dessus du clavier) — saisie de manche,
+/// création de partie, tableau des scores.
 ///
 /// Pourquoi ne pas se fier à `isHittable` : il repose sur le test de toucher **d'accessibilité**,
 /// qui ignore le fond de la zone d'action. Un élément situé sous cette zone (ou sous le clavier)
 /// peut être déclaré « touchable » alors que le toucher réel atterrit sur la barre (constaté en
-/// CI : champ jamais focalisé, bouton « Ajouter un joueur » non touché). On vérifie donc la
+/// CI avec l'ancienne zone superposée au contenu : champ jamais focalisé, bouton « Ajouter un
+/// joueur » non touché ; une ligne à moitié visible au bord de la liste reste concernée). On vérifie donc la
 /// **géométrie** : l'élément doit être entièrement dans la bande utile, sous les barres de
 /// navigation et au-dessus de la zone d'action. Le défilement se fait par glissements courts et
 /// freinés (aucun lancer qui dépasse la cible), depuis la marge gauche du formulaire (aucune
@@ -53,8 +55,8 @@ struct FormDriver {
     var keyboardDoneButton: XCUIElement?
 
     private static let margin: CGFloat = 8
-    /// Marge intérieure verticale de `primaryActionInset` (`Theme.Spacing.m`) : le fond `.bar`
-    /// commence à cette distance au-dessus de son premier élément.
+    /// Marge intérieure verticale de `primaryActionInset` (`Theme.Spacing.m`) : la zone d'action
+    /// (et donc la fin du contenu défilant) commence à cette distance au-dessus de son premier élément.
     private static let actionAreaPadding: CGFloat = 12
     /// Repli **seulement** si aucun élément de la zone d'action n'est mesurable.
     private static let estimatedActionAreaHeight: CGFloat = 160
@@ -79,7 +81,7 @@ struct FormDriver {
         if keyboard.exists {
             bottom = min(bottom, keyboard.frame.minY - Self.keyboardToolbarHeight)
         }
-        // Haut réel de la zone d'action : le contenu défilant s'arrête au-dessus (safe area).
+        // Haut réel de la zone d'action : la zone d'action est une pile verticale opaque sous le contenu, qui s'arrête au-dessus.
         let measuredTops = ([actionButton] + actionAreaElements)
             .filter { $0.exists }
             .map { $0.frame }
@@ -372,7 +374,13 @@ final class ScreenTour {
         try tap("home.resume", "« Reprendre la partie »")
         try require(element("game.addRound"), "tableau des scores à 8 joueurs")
         stop(6, "tableau-8-joueurs")
-        app.swipeUp()
+        // Bas du tableau par glissements freinés (lien « Historique » au-dessus de la zone d'action),
+        // puis attente de l'arrêt complet : `swipeUp()` lançait un défilement inertiel encore en
+        // mouvement pendant l'audit (cadres décalés par rapport à l'image analysée : faux « Contrast
+        // failed » sur des prénoms en plein écran, écran 07 clair).
+        let historyLink = app.buttons["game.historyLink"]
+        FormDriver(app: app, actionButton: app.buttons["game.addRound"]).bringIntoView(historyLink)
+        waitUntilStill(historyLink)
         stop(7, "tableau-8-joueurs-suite")
 
         // Lancement 3 : saisie d'une manche avec aperçu de la pénalité (10 / 24 / 10, Alice clôture :
@@ -538,6 +546,22 @@ final class ScreenTour {
             checkAppearanceIsApplied(on: name)
         }
         onScreen(name)
+    }
+
+    /// Attend qu'un élément ne bouge plus (fin d'un défilement) : deux mesures identiques à 0,25 s
+    /// d'intervalle, 3 s au plus. L'audit analyse une image : un contenu encore en mouvement décale
+    /// les cadres des éléments par rapport aux pixels.
+    private func waitUntilStill(_ element: XCUIElement, timeout: TimeInterval = 3) {
+        guard element.exists else { return }
+        var previous = element.frame
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            guard element.exists else { return }
+            let current = element.frame
+            if current == previous { return }
+            previous = current
+        }
     }
 
     /// Luminance moyenne de l'écran : sombre < 0,45 ; clair > 0,55. Garde-fou contre un thème non

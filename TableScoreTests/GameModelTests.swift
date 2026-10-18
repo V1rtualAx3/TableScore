@@ -29,6 +29,7 @@ struct GameModelTests {
         #expect(rows[0].gapToLeader == 22)
         #expect(model.rankedRows.map(\.total) == [-7, -7, 9, 15, 16, 17, 55, 71])
         #expect(model.headerTitle == "Manche 3")
+        #expect(model.navigationTitle == "Manche 3 · 8 joueurs")
         #expect(model.playerCount == 8)
         #expect(model.canAddRound)
         #expect(!model.hasInconsistency)
@@ -52,6 +53,8 @@ struct GameModelTests {
         #expect(!model.canAddRound)
         #expect(!model.canAbandon)
         #expect(model.headerTitle == "Partie terminée")
+        // Écran de fin : titre seul (masqué dans la barre), sans le nombre de joueurs.
+        #expect(model.navigationTitle == "Partie terminée")
         #expect(model.rows.map(\.total) == [105, 26, 26])
         #expect(model.rows.filter(\.isLeader).map(\.name) == ["Bob", "Chloé"])
         guard case .finished(_, let winnerIDs)? = model.game?.computation.status else {

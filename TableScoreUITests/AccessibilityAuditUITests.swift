@@ -10,8 +10,8 @@ import XCTest
 /// Politique : audit **complet** (`.all`), sans filtre global par type. Un problème détecté est un
 /// vrai défaut à corriger, pas à masquer. Seule exception admise : un faux positif **démontré**,
 /// déclaré dans `exemptions` (écran + type d'audit + identifiant ou libellé exact de l'élément +
-/// justification) et listé dans docs/captures/README.md. Un problème toléré n'échoue pas, mais
-/// reste compté et affiché dans le résumé.
+/// preuve vérifiée à l'exécution + justification) et listé dans docs/captures/README.md. Un
+/// problème toléré n'échoue pas, mais reste compté et affiché dans le résumé.
 ///
 /// Rapport :
 /// - chaque problème devient un `XCTFail` d'**une seule ligne** :
@@ -40,7 +40,7 @@ enum AccessibilityAudit {
                     summary: singleLine(issue.compactDescription),
                     element: describe(issue.element)
                 )
-                if let match = exemption(for: issue, screen: name) {
+                if let match = exemption(for: issue, screen: name, in: app) {
                     report.record(finding, exemptedBecause: match.reason)
                 } else {
                     report.record(finding, exemptedBecause: nil)
@@ -55,7 +55,9 @@ enum AccessibilityAudit {
 
     // MARK: Exceptions (faux positifs démontrés uniquement)
 
-    /// Faux positif démontré : **un** écran, **un** type d'audit, **un** élément précis.
+    /// Faux positif démontré : **un** écran, **un** type d'audit, **un** élément précis, et une
+    /// **preuve vérifiée à l'instant du problème** (`Proof`), jamais supposée. Sans élément
+    /// identifiable (« élément non fourni ») ou preuve non vérifiée, le problème reste un échec.
     struct Exemption {
         /// Début du nom d'écran, sans le thème (« 13-saisie-par-cartes ») : vaut pour les deux thèmes.
         let screenPrefix: String
@@ -63,30 +65,115 @@ enum AccessibilityAudit {
         /// Identifiant d'accessibilité exact de l'élément (prioritaire) ; à défaut, libellé exact.
         let elementIdentifier: String?
         let elementLabel: String?
+        let proof: Proof
         /// Pourquoi ce n'est pas un défaut (affiché dans le résumé ; aussi dans docs/captures/README.md).
         let reason: String
     }
 
-    /// Liste **vide** : aucun faux positif n'est démontré à ce jour. Toute entrée doit citer
-    /// l'élément exact relevé par le résumé de la CI et être reportée dans docs/captures/README.md.
+    /// Condition vérifiée sur l'élément signalé, au moment où l'audit le signale.
+    enum Proof {
+        /// L'élément est un élément d'une barre de navigation UIKit : un élément de même type, même
+        /// identifiant (ou libellé) et **même cadre** existe dans `app.navigationBars`.
+        case inNavigationBar
+        /// La commande est désactivée (`isEnabled == false`).
+        case disabled
+    }
+
+    private static let navigationBarReason = "bouton de barre de navigation (UIKit) : taille de texte "
+        + "plafonnée par le système, Grand contenu à l'appui long ; non modifiable par l'app"
+    private static let disabledReason = "commande désactivée (formulaire incomplet) : WCAG 1.4.3 exempte "
+        + "les composants inactifs ; la raison du blocage est affichée au-dessus en texte contrasté"
+
+    /// Faux positifs démontrés (résumé de la CI du 2026-10-18, 6653ff6) ; chaque entrée est reportée
+    /// dans docs/captures/README.md.
     @MainActor
-    static let exemptions: [Exemption] = []
+    static let exemptions: [Exemption] = [
+        Exemption(
+            screenPrefix: "02-creation-partie", type: .dynamicType,
+            elementIdentifier: "setup.cancel", elementLabel: nil,
+            proof: .inNavigationBar, reason: navigationBarReason
+        ),
+        // `EditButton` système, sans identifiant propre : libellé exact.
+        Exemption(
+            screenPrefix: "02-creation-partie", type: .dynamicType,
+            elementIdentifier: nil, elementLabel: "Modifier",
+            proof: .inNavigationBar, reason: navigationBarReason
+        ),
+        Exemption(
+            screenPrefix: "08-saisie-manche-penalite", type: .dynamicType,
+            elementIdentifier: "round.cancel", elementLabel: nil,
+            proof: .inNavigationBar, reason: navigationBarReason
+        ),
+        Exemption(
+            screenPrefix: "13-saisie-par-cartes", type: .dynamicType,
+            elementIdentifier: "round.cancel", elementLabel: nil,
+            proof: .inNavigationBar, reason: navigationBarReason
+        ),
+        // « OK » de la feuille de consultation des cartes (sans identifiant, piloté par libellé).
+        Exemption(
+            screenPrefix: "12-cartes-consultation", type: .dynamicType,
+            elementIdentifier: nil, elementLabel: "OK",
+            proof: .inNavigationBar, reason: navigationBarReason
+        ),
+        // « Commencer » sur le formulaire vide (écran 02 capturé à l'ouverture).
+        Exemption(
+            screenPrefix: "02-creation-partie", type: .contrast,
+            elementIdentifier: "setup.start", elementLabel: nil,
+            proof: .disabled, reason: disabledReason
+        ),
+    ]
 
     @MainActor
-    private static func exemption(for issue: XCUIAccessibilityAuditIssue, screen: String) -> Exemption? {
+    private static func exemption(
+        for issue: XCUIAccessibilityAuditIssue,
+        screen: String,
+        in app: XCUIApplication
+    ) -> Exemption? {
         guard !exemptions.isEmpty, let snapshot = try? issue.element?.snapshot() else { return nil }
         return exemptions.first { exemption in
             guard screen.hasPrefix(exemption.screenPrefix), issue.auditType == exemption.type else {
                 return false
             }
             if let identifier = exemption.elementIdentifier {
-                return snapshot.identifier == identifier
+                guard snapshot.identifier == identifier else { return false }
+            } else if let label = exemption.elementLabel {
+                guard snapshot.label == label else { return false }
+            } else {
+                return false
             }
-            if let label = exemption.elementLabel {
-                return snapshot.label == label
-            }
-            return false
+            return isProven(exemption, for: snapshot, in: app)
         }
+    }
+
+    /// Vérifie la preuve de l'exception sur l'élément signalé (état réel, pas supposé).
+    @MainActor
+    private static func isProven(
+        _ exemption: Exemption,
+        for snapshot: any XCUIElementSnapshot,
+        in app: XCUIApplication
+    ) -> Bool {
+        switch exemption.proof {
+        case .disabled:
+            return !snapshot.isEnabled
+        case .inNavigationBar:
+            let candidates = app.navigationBars.descendants(matching: snapshot.elementType)
+            let match: XCUIElement
+            if let identifier = exemption.elementIdentifier {
+                match = candidates.matching(identifier: identifier).firstMatch
+            } else if let label = exemption.elementLabel {
+                match = candidates.matching(NSPredicate(format: "label == %@", label)).firstMatch
+            } else {
+                return false
+            }
+            guard let inBar = try? match.snapshot() else { return false }
+            return isSameFrame(inBar.frame, snapshot.frame)
+        }
+    }
+
+    /// Cadres identiques à moins d'un point près (même élément vu par deux requêtes).
+    private static func isSameFrame(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.minX - rhs.minX) < 1 && abs(lhs.minY - rhs.minY) < 1
+            && abs(lhs.width - rhs.width) < 1 && abs(lhs.height - rhs.height) < 1
     }
 
     // MARK: Résumé de fin de test

@@ -224,35 +224,25 @@ private struct RoundEntryForm: View {
 
     // MARK: Zone d'action
 
-    /// Ligne courte au-dessus du bouton : pénalité du clôturant (saisie complète, visible avant
-    /// d'enregistrer même clavier ouvert) ou ce qui manque encore. Tailles d'accessibilité : une
-    /// seule ligne, et rien tant qu'un champ a le focus (le clavier occupe déjà l'écran ; le
-    /// détail reste dans l'aperçu et dans l'indice VoiceOver du bouton).
+    /// Texte court au-dessus du bouton : pénalité du clôturant (saisie complète, visible avant
+    /// d'enregistrer même clavier ouvert) ou ce qui manque encore (résumé déjà borné par le modèle :
+    /// au-delà de deux joueurs, un décompte). Toujours **en entier** : plus de plafond de lignes, qui
+    /// tronquait la pénalité dès qu'elle dépassait deux lignes (audit « Text clipped », écrans 08 et
+    /// 13). Tailles d'accessibilité : rien tant qu'un champ a le focus (le clavier occupe déjà
+    /// l'écran ; le détail reste dans l'aperçu et dans l'indice VoiceOver du bouton).
     @ViewBuilder
     private var actionSummary: some View {
         if showsActionSummary {
             if let line = model.closerPreviewLine, let description = line.closerDescription {
-                CloserPreviewLabel(
-                    description: description,
-                    isDoubled: line.isDoubled,
-                    lineLimit: summaryLineLimit(regular: 2)
-                )
+                CloserPreviewLabel(description: description, isDoubled: line.isDoubled)
             } else if let summary = model.blockingSummary {
-                BlockingSummaryLabel(
-                    summary: summary,
-                    spokenSummary: model.blockingHint ?? summary,
-                    lineLimit: summaryLineLimit(regular: 3)
-                )
+                BlockingSummaryLabel(summary: summary, spokenSummary: model.blockingHint ?? summary)
             }
         }
     }
 
     private var showsActionSummary: Bool {
         !(dynamicTypeSize.isAccessibilitySize && focusedField != nil)
-    }
-
-    private func summaryLineLimit(regular: Int) -> Int {
-        dynamicTypeSize.isAccessibilitySize ? 1 : regular
     }
 
     @ToolbarContentBuilder
@@ -483,22 +473,27 @@ private struct RoundEntryForm: View {
 }
 
 /// Pénalité du clôturant au-dessus du bouton : « Alice : 10 → 20 (score doublé : égalité avec Chloé) ».
+///
+/// Texte complet, retour à la ligne libre (aucune troncature). Élément VoiceOver unique de type
+/// **texte** (`isStaticText`) : sans ce trait, l'élément regroupé n'avait aucun type et l'audit le
+/// traitait comme une commande (« Hit area is too small », 16 pt de haut), alors qu'il n'est pas
+/// interactif.
 private struct CloserPreviewLabel: View {
     let description: PenaltyPreviewFormatter.Description
     let isDoubled: Bool
-    let lineLimit: Int
 
     var body: some View {
         Label {
             Text(verbatim: description.text)
+                .fixedSize(horizontal: false, vertical: true)
         } icon: {
             icon
         }
         .font(font)
-        .lineLimit(lineLimit)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: description.spoken))
+        .accessibilityAddTraits(.isStaticText)
         .accessibilityIdentifier(AccessibilityID.Round.closerPreview)
     }
 
@@ -518,24 +513,25 @@ private struct CloserPreviewLabel: View {
     }
 }
 
-/// Ce qui manque encore (hauteur bornée avec le clavier ouvert ; liste complète lue par VoiceOver).
+/// Ce qui manque encore : résumé court (borné par le modèle), affiché en entier ; liste complète
+/// lue par VoiceOver. Élément de type texte, non interactif (voir `CloserPreviewLabel`).
 private struct BlockingSummaryLabel: View {
     let summary: String
     let spokenSummary: String
-    let lineLimit: Int
 
     var body: some View {
         Label {
             Text(verbatim: summary)
+                .fixedSize(horizontal: false, vertical: true)
         } icon: {
             Image(systemName: "info.circle")
         }
         .font(.footnote)
         .foregroundStyle(Theme.Palette.secondaryText)
-        .lineLimit(lineLimit)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: spokenSummary))
+        .accessibilityAddTraits(.isStaticText)
         .accessibilityIdentifier(AccessibilityID.Round.blockingReasons)
     }
 }

@@ -84,14 +84,25 @@ AX3 n'est pas auditée (captures seules).
 
 ### Exceptions (faux positifs)
 
-Aucun type d'audit n'est exclu globalement. Une exception n'est admise que pour un faux positif
-**démontré**, déclarée dans `AccessibilityAudit.exemptions` avec écran, type d'audit, identifiant (ou
-libellé exact) de l'élément et justification, puis listée ci-dessous. Un problème toléré n'échoue pas mais
-reste affiché dans le résumé (« TOLÉRÉ : raison »).
+Aucun type d'audit ni aucun écran n'est exclu globalement. Une exception n'est admise que pour un faux
+positif **démontré**, déclarée dans `AccessibilityAudit.exemptions` avec écran, type d'audit, identifiant
+(ou libellé exact) de l'élément, **preuve vérifiée à l'exécution** et justification, puis listée
+ci-dessous. Preuves possibles : `inNavigationBar` (un élément de même type, même identifiant ou libellé et
+même cadre existe dans `app.navigationBars`) ; `disabled` (`isEnabled == false` sur l'élément signalé).
+Preuve non vérifiée, ou élément non identifiable (« élément non fourni ») : le problème reste un échec.
+Un problème toléré n'échoue pas mais reste affiché dans le résumé (« TOLÉRÉ : raison »).
 
-| Écran | Type | Élément | Justification |
-|---|---|---|---|
-| — | — | — | Aucune exception à ce jour. |
+| Écran | Type | Élément | Preuve | Justification |
+|---|---|---|---|---|
+| 02 `creation-partie` | Dynamic Type | `setup.cancel` « Annuler » | `inNavigationBar` | Bouton de barre de navigation UIKit : taille de texte plafonnée par le système, Grand contenu à l'appui long ; non modifiable par l'app. |
+| 02 `creation-partie` | Dynamic Type | « Modifier » (`EditButton` système) | `inNavigationBar` | Idem. |
+| 08 `saisie-manche-penalite` | Dynamic Type | `round.cancel` « Annuler » | `inNavigationBar` | Idem. |
+| 13 `saisie-par-cartes` | Dynamic Type | `round.cancel` « Annuler » | `inNavigationBar` | Idem. |
+| 12 `cartes-consultation` | Dynamic Type | « OK » (fermeture de la feuille) | `inNavigationBar` | Idem. |
+| 02 `creation-partie` | Contraste | `setup.start` « Commencer » | `disabled` | Formulaire vide à la capture : bouton désactivé. WCAG 1.4.3 exempte les composants inactifs ; la raison du blocage est affichée au-dessus en texte contrasté (`secondaryText`). |
+
+Les boutons de retour système ne sont pas signalés ; les titres système de barre non plus (d'où le titre
+système « Manche 3 · 8 joueurs » du tableau, voir ci-dessous).
 
 ### Corrections de fond (audit de la PR n° 5)
 
@@ -110,9 +121,43 @@ reste affiché dans le résumé (« TOLÉRÉ : raison »).
   sélecteur et titres de colonnes sur plusieurs lignes si besoin ; date et statut des parties terminées
   empilés quand ils ne tiennent pas sur une ligne.
 - **Dynamic Type** : totaux en `.largeTitle` (style de texte direct, sans police arrondie recréée).
-- Restes à confirmer par le prochain résumé de la CI (élément exact) : zone touchable des champs de score
-  et des sélecteurs « Points | Cartes », Dynamic Type des écrans 07, 08, 09, 12, 13, textes tronqués des
-  écrans 08 à 13.
+
+### Seconde passe (résumé de la CI sur 6653ff6 : 258 problèmes)
+
+- **Contraste, texte sous la zone d'action** (06 « Classement » ; 08 « Chloé », « +10 », « Total : 23 →
+  33 » ; 13 « Total brut », « Bob » ; 15 « 4 cartes à saisir ») : les cadres signalés sont **derrière** la
+  zone d'action translucide (`safeAreaInset` + `.bar`), texte flouté. Probablement aussi 02 (« RÈGLES »,
+  « Skyjo classique · 100 points », « Règles maison ») si le clavier, ouvert à l'arrivée sur le formulaire,
+  a remonté la zone d'action pendant l'audit (non démontré : le cadre de « Commencer » est relevé plus tard,
+  clavier fermé). Correction : `primaryActionInset` devient une zone **opaque placée sous** le contenu
+  défilant (pile verticale, filet de séparation) ; plus aucun contenu ne défile derrière l'action.
+- **Contraste, boutons secondaires** « Nouvelle partie » (05) et « Reprendre la photo » (15) : fond
+  `.bordered` translucide posé sur le matériau `.bar` ; les mêmes boutons sur fond opaque (fin de partie,
+  écran 11) passent. Corrigé par la zone opaque.
+- **Contraste, écran 07** (« Chloé », « Élodie » en plein écran, lignes du haut) : capture prise après
+  `swipeUp()`, défilement inertiel encore en mouvement pendant l'audit. Le parcours descend désormais par
+  glissements freinés jusqu'au lien « Historique » puis attend l'immobilité (`waitUntilStill`).
+- **Dynamic Type, tableau (06, 07)** : prénoms, rangs, écarts, « En tête », « Classement » étaient des
+  enfants d'une `LazyVStack` ; les lignes de fin de partie, de même structure dans une pile ordinaire
+  (écran 11), ne sont pas signalées (corrélation, cause à confirmer par le prochain résumé). Tableau en
+  `VStack` (8 joueurs au plus, aucune perte mesurable). Prénom sans limite de lignes en tailles
+  d'accessibilité.
+- **Dynamic Type, titre du tableau** (« Manche 3 », « 8 joueurs » en `ToolbarItem(.principal)`) : titre
+  système « Manche 3 · 8 joueurs » (Grand contenu fourni par le système).
+- **Zone touchable** : aperçu du clôturant (`round.closerPreview`, 16 pt de haut) et sous-totaux de
+  colonne (« Colonne 2, 6 points », 11 × 20 pt ; écrans 13 à 15) étaient des éléments regroupés **sans
+  type** (« autre »), traités comme des commandes : trait `isStaticText` (ce sont des textes, non
+  interactifs) ; sous-total sur toute la largeur de la colonne.
+- **Texte tronqué** : aperçu du clôturant et résumé de blocage sans plafond de lignes (`lineLimit(2)` /
+  `lineLimit(1)` en tailles d'accessibilité tronquaient la pénalité) ; toujours masqués en tailles
+  d'accessibilité tant qu'un champ a le focus.
+- **Restes sans cause établie** (à confirmer par le prochain résumé ; reproduction locale conseillée avec
+  l'audit de l'Inspecteur d'accessibilité sur simulateur iOS 18) : Dynamic Type « partially unsupported » de
+  textes de listes (`Form`/`List` : « Vos données… » 04, pied « De 2 à 8 joueurs… » 02, en-tête « POINTS DE
+  LA MANCHE » 13, « Règles maison » 02, « Supprimer la dernière manche » 09) et « unsupported » non
+  identifiés (08 ×9, 09 ×6) ; textes tronqués dans des listes (01 ×3, 04, 05 carte de reprise, 09, 10
+  « Vainqueur : Bob », 12 « Colonne N — … ») ; champs « Prénom du joueur N » (02 : `TextField` sur une
+  ligne, contenu défilant à l'édition) ; contraste non identifié en 09 sombre.
 
 ## Limites
 

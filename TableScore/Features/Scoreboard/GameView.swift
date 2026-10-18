@@ -49,24 +49,20 @@ private struct GameContentView: View {
             }
         }
         .background(Theme.Palette.background)
-        .navigationTitle(model.headerTitle)
+        // Titre **système** « Manche 3 · 8 joueurs » : taille plafonnée par UIKit dans la barre, avec
+        // le Grand contenu (appui long) fourni par le système. L'ancien titre composé à la main
+        // (`ToolbarItem(.principal)` titre + sous-titre) subissait le même plafond sans ce relais
+        // (audit : « Dynamic Type partially unsupported » sur « Manche 3 » et « 8 joueurs »).
+        .navigationTitle(model.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if model.loadState == .loaded {
-                ToolbarItem(placement: .principal) {
-                    if model.showsFinalResults {
+                if model.showsFinalResults {
+                    ToolbarItem(placement: .principal) {
                         // Le titre « Partie terminée » est dans l'écran de fin : pas de doublon dans la barre.
                         Color.clear
                             .frame(width: 1, height: 1)
                             .accessibilityHidden(true)
-                    } else {
-                        VStack(spacing: 0) {
-                            Text(model.headerTitle).font(.headline)
-                            Text(model.headerSubtitle)
-                                .font(.caption)
-                                .foregroundStyle(Theme.Palette.secondaryText)
-                        }
-                        .accessibilityElement(children: .combine)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -146,9 +142,14 @@ private struct GameContentView: View {
         }
     }
 
+    /// Pile **non paresseuse** : 8 joueurs au plus, plus le classement et le lien d'historique.
+    /// `LazyVStack` n'apportait rien à cette taille (optimisation non mesurée). Constat de l'audit :
+    /// les textes de ses enfants directs, créés à la demande (lignes, « Classement »), étaient tous
+    /// signalés « Dynamic Type partially unsupported » (écrans 06 et 07), alors que les lignes de fin
+    /// de partie, de même structure mais regroupées dans une pile ordinaire (écran 11), ne l'étaient pas.
     private var scoreboardScroll: some View {
         ScrollView {
-            LazyVStack(spacing: Theme.Spacing.s) {
+            VStack(spacing: Theme.Spacing.s) {
                 if model.hasInconsistency {
                     inconsistencyBanner
                 }

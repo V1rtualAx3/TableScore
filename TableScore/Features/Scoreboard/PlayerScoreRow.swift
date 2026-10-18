@@ -38,7 +38,9 @@ struct PlayerScoreRow: View {
     private var nameView: some View {
         Text(row.name)
             .font(Theme.Typography.playerName)
-            .lineLimit(2)
+            // Tailles d'accessibilité : prénom seul sur sa ligne, jamais tronqué (24 caractères
+            // peuvent dépasser deux lignes en AX5) ; deux lignes au plus à côté du total sinon.
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
             .fixedSize(horizontal: false, vertical: true)
     }
 
