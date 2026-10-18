@@ -30,6 +30,7 @@ struct AppShellTests {
         #expect(AccessibilityID.GameOver.replay == "gameOver.replay")
         #expect(AccessibilityID.History.round(index: 3) == "history.round.3")
         #expect(AccessibilityID.StorageError.retry == "storageError.retry")
+        #expect(AccessibilityID.StorageError.setAside == "storageError.setAside")
         // Lot 3 (saisie par cartes)
         #expect(AccessibilityID.Round.inputMethod(position: 2) == "round.inputMethod.2")
         #expect(AccessibilityID.Round.cardsNotice(position: 2) == "round.cardsNotice.2")
