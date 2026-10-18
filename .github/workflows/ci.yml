@@ -177,6 +177,9 @@ jobs:
         run: bash scripts/ci/check-binary.sh "$RUNNER_TEMP/DerivedData"
 
       - name: Tests unitaires et UI
+        # Inclut les captures d'écran (ScreenshotTests, clair/sombre/AX3) et les audits
+        # d'accessibilité (AccessibilityAuditUITests) : un défaut d'audit fait échouer le job.
+        id: tests
         run: |
           set -euo pipefail
           xcodebuild test-without-building \
@@ -206,6 +209,24 @@ jobs:
 
       - name: Aucun code de test ou de preview dans le binaire Release
         run: bash scripts/ci/check-release-symbols.sh "$RUNNER_TEMP/DerivedDataRelease"
+
+      - name: Export des captures d'écran du résultat de tests
+        # Exécuté dès que les tests ont tourné (succès OU échec), après les contrôles Release pour
+        # ne jamais les masquer. Commande : « xcrun xcresulttool export attachments --path ...
+        # --output-path ... » (Xcode 16.x), encapsulée et documentée dans le script, qui ÉCHOUE
+        # explicitement si l'export est vide ou incomplet (le code retour n'est jamais neutralisé).
+        if: ${{ !cancelled() && steps.tests.conclusion != 'skipped' }}
+        run: bash scripts/ci/export-screenshots.sh "$RUNNER_TEMP/TestResults.xcresult" "$RUNNER_TEMP/captures-ecran"
+
+      - name: Publication des captures d'écran
+        # Toujours publiée (pas seulement en échec) : revue UX clair/sombre sans Mac (CDC §11).
+        if: ${{ !cancelled() && steps.tests.conclusion != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: captures-ecran
+          path: ${{ runner.temp }}/captures-ecran
+          retention-days: 14
+          if-no-files-found: error
 
       - name: Conservation du résultat de tests en cas d'échec
         if: failure()

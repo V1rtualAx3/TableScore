@@ -17,8 +17,16 @@ expect_fail() { # fixture marqueur...
   echo "ok  $name"
 }
 
-out="$(bash "$check" "$here/fixtures/clean" 2>&1)" || { echo "KO  clean : $out"; failed=1; }
-echo "ok  clean"
+expect_ok() { # fixture : le contrôle doit réussir (code 0)
+  local name="$1" out rc=0
+  out="$(bash "$check" "$here/fixtures/$name" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then echo "KO  $name : code $rc au lieu de 0 : $out"; failed=1; return; fi
+  echo "ok  $name"
+}
+
+expect_ok clean
+# Exception P2 (2026-10-18) : appareil photo autorisé (clé NSCameraUsageDescription, AVFoundation, Vision).
+expect_ok camera-ok
 
 expect_fail swift-api 'URLSession.shared' 'URLRequest' 'NSURLConnection' 'CFNetworkCopy' 'CFStreamCreate' \
   'NWConnection' 'WKWebView' 'AsyncImage' 'contentsOf:' 'socket(' 'getaddrinfo' 'openURL' 'Link("x"' 'UIApplication.shared.open'
@@ -30,10 +38,15 @@ expect_fail native-code 'a.m' 'b.mm' 'c.c' 'd.cpp' 'e.h'
 expect_fail pbxproj 'XCRemoteSwiftPackageReference' 'repositoryURL' 'PBXShellScriptBuildPhase'
 expect_fail package-swift '.package(url:'
 expect_fail package-resolved 'identity'
-expect_fail config 'NSCameraUsageDescription' 'NSBonjourServices' 'NSAppTransportSecurity' 'UIBackgroundModes' \
+expect_fail config 'NSLocationWhenInUseUsageDescription' 'NSBonjourServices' 'NSAppTransportSecurity' 'UIBackgroundModes' \
   'aps-environment' 'com.apple.developer.icloud-services' 'SystemCapabilities' 'CODE_SIGN_ENTITLEMENTS'
 expect_fail entitlements 'App.entitlements'
 expect_fail cloudkit 'cloudKitDatabase: .automatic' 'cloudKitDatabase:.private' 'import CloudKit'
+# Photothèque, micro, localisation refusés (même à côté de la clé caméra) ; clé caméra hors projet/plist refusée.
+expect_fail photo-library 'NSPhotoLibraryUsageDescription' 'NSPhotoLibraryAddUsageDescription' \
+  'NSMicrophoneUsageDescription' 'NSCameraUsageDescriptionExtra' 'NSLocationWhenInUseUsageDescription' \
+  'Camera.xcconfig:1:INFOPLIST_KEY_NSCameraUsageDescription' 'import Photos' 'import PhotosUI' \
+  'PHPhotoLibrary' 'UIImageWriteToSavedPhotosAlbum' 'PHPickerViewController' 'AVCaptureMovieFileOutput' 'AVAudioRecorder'
 
 # --- check-binary.sh / check-release-symbols.sh : logique testée avec des outils factices ---
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
@@ -56,7 +69,7 @@ run_symbols '_main
 $s10TableScore7AppRootV' 'Hello'
 if [ "$rc" -eq 0 ]; then echo "ok  release-symbols clean"; else echo "KO  release-symbols clean : $out"; failed=1; fi
 
-for sym in UITestSeed previewEnvironment simulatesWriteFailure uiTestingPersistentStore resetUITestStore InMemoryGameRepository; do
+for sym in UITestSeed previewEnvironment simulatesWriteFailure uiTestingPersistentStore resetUITestStore InMemoryGameRepository CardScanFixture scanFixture; do
   run_symbols "_main $sym" 'Hello'
   if [ "$rc" -eq 1 ] && grep -qF -- "::error::" <<<"$out" && grep -qF -- "$sym" <<<"$out"; then echo "ok  release-symbols nm $sym"; else echo "KO  release-symbols nm $sym (code $rc)"; failed=1; fi
   run_symbols '_main' "-$sym"

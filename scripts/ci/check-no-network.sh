@@ -12,6 +12,10 @@
 #    légitime (import/export) ; il faudra alors un correctif explicite et audité ici.
 #  - Le dossier scripts/ci/fixtures (cas négatifs de non-régression) est exclu, par chemin
 #    exact relatif à la racine, de tous les scans.
+#  - Permissions : UNE seule exception, `NSCameraUsageDescription` (prototype P2 « Scanner les
+#    cartes », décision utilisateur du 2026-10-18, cahier §2), admise uniquement dans le projet
+#    Xcode (*.pbxproj) ou un Info.plist. Toute autre clé *UsageDescription (photothèque, micro,
+#    localisation…) reste bloquante, de même que les API d'enregistrement d'images/vidéo/son.
 # Limite : une heuristique textuelle n'est pas une preuve ; elle est complétée par
 # l'inspection binaire (check-binary.sh) et un test manuel en mode avion.
 set -euo pipefail
@@ -54,6 +58,32 @@ scan() {
   fi
 }
 
+# scan_permissions DESCRIPTION : comme `scan`, pour les clés *UsageDescription, en retirant
+# d'abord chaque occurrence EXACTE (bornée) de la clé caméra autorisée ; tout reste bloque
+# (autre permission, même sur la même ligne, ou clé voisine comme NSCameraUsageDescriptionX).
+scan_permissions() {
+  local desc="$1" out line stripped rest="" rc=0
+  if [ ${#LIST[@]} -eq 0 ]; then return 0; fi
+  out="$(grep -nHE -- 'UsageDescription' "${LIST[@]}")" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    fail "grep a échoué (code $rc) pour : $desc"
+    return 0
+  fi
+  if [ "$rc" -eq 1 ]; then return 0; fi
+  # Ligne par ligne ; la ligne d'origine est affichée. Un échec de sed interrompt le script
+  # (set -e) : il ne peut pas passer pour « rien trouvé ».
+  while IFS= read -r line; do
+    stripped="$(sed -E 's/(^|[^[:alnum:]_])(INFOPLIST_KEY_)?NSCameraUsageDescription([^[:alnum:]_]|$)/\1 \3/g' <<<"$line")"
+    if [[ "$stripped" == *UsageDescription* ]]; then
+      rest+="$line"$'\n'
+    fi
+  done <<<"$out"
+  if [ -n "$rest" ]; then
+    fail "$desc"
+    printf '%s' "$rest"
+  fi
+}
+
 # 1. Sources Swift ------------------------------------------------------------
 list_files '*.swift'
 if [ ${#LIST[@]} -eq 0 ]; then
@@ -64,7 +94,12 @@ swift_count=${#LIST[@]}
 api_re='URLSession|URLRequest|NSURLConnection|NSURLSession|CFNetwork|CFStream|CFSocket|NWConnection|NWListener|NWBrowser|NWPathMonitor|WKWebView|WKNavigation|SFSafariViewController|ASWebAuthenticationSession|AsyncImage|CKContainer|CKDatabase|CKRecord|getaddrinfo|socket[[:space:]]*\(|contentsOf:|openURL|(^|[^[:alnum:]_])Link[[:space:]]*\(|UIApplication\.shared\.open|MCSession|GKLocalPlayer|SKPaymentQueue|ASIdentifierManager|ATTrackingManager'
 scan "API réseau/sortie externe interdite (sources Swift)" "$api_re"
 
-import_re='(^|[^[:alnum:]_])import[[:space:]]+([A-Za-z]+[[:space:]]+)?(Network|NetworkExtension|WebKit|SafariServices|CloudKit|MultipeerConnectivity|GameKit|StoreKit|AdSupport|AppTrackingTransparency|AuthenticationServices|MapKit|CFNetwork|Alamofire|Firebase[A-Za-z]*|Sentry)([^[:alnum:]_]|$)'
+# Prototype P2 (appareil photo) : l'image reste en mémoire. Aucun enregistrement dans la
+# photothèque ni de vidéo/son, aucun sélecteur de photothèque.
+media_re='UIImageWriteToSavedPhotosAlbum|UISaveVideoAtPathToSavedPhotosAlbum|PHPhotoLibrary|PHAssetCreationRequest|PHPickerViewController|PhotosPicker|AVCaptureMovieFileOutput|AVCaptureAudioDataOutput|AVAssetWriter|AVAudioRecorder'
+scan "Enregistrement ou accès photothèque/vidéo/son interdit (sources Swift)" "$media_re"
+
+import_re='(^|[^[:alnum:]_])import[[:space:]]+([A-Za-z]+[[:space:]]+)?(Network|NetworkExtension|WebKit|SafariServices|CloudKit|MultipeerConnectivity|GameKit|StoreKit|AdSupport|AppTrackingTransparency|AuthenticationServices|MapKit|CFNetwork|Photos|PhotosUI|Alamofire|Firebase[A-Za-z]*|Sentry)([^[:alnum:]_]|$)'
 scan "Import de framework réseau/tiers interdit" "$import_re"
 
 # Schémas d'URL insensibles à la casse (HTTPS://, Wss://...).
@@ -99,12 +134,19 @@ if [ ${#LIST[@]} -gt 0 ]; then
 fi
 
 list_files '*.pbxproj' '*.plist' '*.xcconfig'
-scan "Réglage réseau, permission, capability ou entitlement interdit" \
-  'UsageDescription|NSBonjourServices|SystemCapabilities|aps-environment|[iI][cC]loud|CODE_SIGN_ENTITLEMENTS|NSAppTransportSecurity|NSAllowsArbitraryLoads|UIBackgroundModes|com\.apple\.developer\.'
+scan "Réglage réseau, capability ou entitlement interdit" \
+  'NSBonjourServices|SystemCapabilities|aps-environment|[iI][cC]loud|CODE_SIGN_ENTITLEMENTS|NSAppTransportSecurity|NSAllowsArbitraryLoads|UIBackgroundModes|com\.apple\.developer\.'
+
+# Permissions : seule NSCameraUsageDescription (exception P2), dans *.pbxproj / *.plist uniquement.
+list_files '*.pbxproj' '*.plist'
+scan_permissions "Permission interdite (seule NSCameraUsageDescription est admise, exception P2)"
+list_files '*.xcconfig'
+scan "Permission interdite dans un .xcconfig (clé caméra admise seulement dans le projet ou un Info.plist)" \
+  'UsageDescription'
 
 # Bilan --------------------------------------------------------------------------
 if [ "$failures" -gt 0 ]; then
   echo "ÉCHEC : $failures contrôle(s) en défaut (politique hors ligne, cahier des charges §7)."
   exit 1
 fi
-echo "OK : ${swift_count} fichiers Swift analysés ; aucune API réseau, URL distante, dépendance, entitlement ni permission."
+echo "OK : ${swift_count} fichiers Swift analysés ; aucune API réseau, URL distante, dépendance ni entitlement ; aucune permission hors appareil photo (exception P2)."
