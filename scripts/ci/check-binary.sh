@@ -6,7 +6,8 @@
 # Cibles : exécutable principal et dylib de premier niveau du bundle (en Debug, Xcode 16
 # place le code dans TableScore.debug.dylib). PlugIns/ et Frameworks/ (XCTest...) sont
 # ignorés pour éviter les faux positifs liés à l'outillage de test.
-#  - otool -L (dépendances directes) : Network, WebKit, SafariServices BLOQUANTS ;
+#  - otool -L (dépendances directes) : Network, WebKit, SafariServices, Photos, PhotosUI, VisionKit
+#    BLOQUANTS (prototype P2 caméra : ni photothèque ni VisionKit) ;
 #    CFNetwork INFORMATIF (peut être tiré indirectement par des frameworks système).
 #  - nm -u (symboles non résolus) : URLSession/NSURLSession, nw_connection, WKWebView BLOQUANTS.
 # Variables OTOOL / NM permettent de substituer les outils (tests de la logique hors macOS).
@@ -39,8 +40,8 @@ for bin in "${targets[@]}"; do
   echo "--- $bin"
   libs="$("$otool_bin" -L "$bin")"
   echo "$libs"
-  if echo "$libs" | grep -E '/(Network|WebKit|SafariServices)\.framework/'; then
-    echo "::error::Framework réseau/Web lié directement : $bin"
+  if echo "$libs" | grep -E '/(Network|WebKit|SafariServices|Photos|PhotosUI|VisionKit)\.framework/'; then
+    echo "::error::Framework réseau/Web/photothèque/VisionKit lié directement : $bin"
     failures=$((failures + 1))
   fi
   if echo "$libs" | grep -E '/CFNetwork\.framework/'; then
@@ -57,4 +58,4 @@ if [ "$failures" -gt 0 ]; then
   echo "ÉCHEC : inspection binaire en défaut ($failures)."
   exit 1
 fi
-echo "OK : aucune dépendance Network/WebKit/SafariServices ni symbole URLSession/nw_connection/WKWebView."
+echo "OK : aucune dépendance Network/WebKit/SafariServices/Photos/PhotosUI/VisionKit ni symbole URLSession/nw_connection/WKWebView."

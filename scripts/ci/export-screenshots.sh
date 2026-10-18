@@ -13,7 +13,7 @@
 #
 # Échec EXPLICITE (code 1, annotation ::error::) si : le bundle est absent, l'export échoue, le
 # manifeste est absent ou illisible, aucune capture n'est retenue, une capture est vide, ou moins de
-# MIN_CAPTURES captures sont trouvées (défaut 32 = 14 écrans x 2 thèmes + 4 écrans en AX3).
+# MIN_CAPTURES captures sont trouvées (défaut 34 = 15 écrans x 2 thèmes + 4 écrans en AX3).
 #
 # Variables : MIN_CAPTURES (nombre minimal attendu) ; XCRESULTTOOL (commande à la place de
 # « xcrun xcresulttool », pour tester la logique hors macOS).
@@ -21,7 +21,7 @@ set -euo pipefail
 
 bundle="${1:?Usage: export-screenshots.sh RESULT_BUNDLE.xcresult OUTPUT_DIR}"
 out="${2:?Usage: export-screenshots.sh RESULT_BUNDLE.xcresult OUTPUT_DIR}"
-min="${MIN_CAPTURES:-32}"
+min="${MIN_CAPTURES:-34}"
 read -r -a tool <<< "${XCRESULTTOOL:-xcrun xcresulttool}"
 
 fail() {
