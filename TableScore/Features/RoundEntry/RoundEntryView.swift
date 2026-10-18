@@ -180,6 +180,7 @@ private struct RoundEntryForm: View {
             Section {
                 ForEach(model.fields) { field in
                     ScoreEntryRow(field: field, model: model, focus: $focusedField)
+                        .id(ScoreEntryRow.scrollAnchor(position: field.position))
                 }
             } header: {
                 Text("Points de la manche")
@@ -437,7 +438,7 @@ private struct RoundEntryForm: View {
     }
 
     /// Champ suivant (joueurs en mode « Points » : une grille n'a pas de champ texte) ; après le
-    /// dernier, ferme le clavier et montre le choix du clôturant.
+    /// dernier, ferme le clavier et montre la première grille incomplète, sinon le choix du clôturant.
     private func focusNextField(proxy: ScrollViewProxy) {
         let fields = model.fields
         if let current = focusedField,
@@ -447,9 +448,16 @@ private struct RoundEntryForm: View {
             return
         }
         focusedField = nil
+        let target: String
+        if let gridID = model.firstIncompleteGridParticipantID,
+           let gridField = fields.first(where: { $0.participantID == gridID }) {
+            target = ScoreEntryRow.scrollAnchor(position: gridField.position)
+        } else {
+            target = CloserPicker.scrollAnchor
+        }
         let animation: Animation? = reduceMotion ? nil : .default
         withAnimation(animation) {
-            proxy.scrollTo(CloserPicker.scrollAnchor, anchor: .top)
+            proxy.scrollTo(target, anchor: .top)
         }
     }
 

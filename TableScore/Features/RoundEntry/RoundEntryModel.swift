@@ -68,15 +68,19 @@ final class RoundEntryModel {
         /// Message affiché sous le champ (erreur ou avertissement) ; mode « points » seulement.
         var message: String? {
             guard inputMethod == .points else { return nil }
+            return Self.statusMessage(for: status)
+        }
+
+        private static func statusMessage(for status: FieldStatus) -> String? {
             switch status {
             case .invalid:
-                "Nombre entier attendu"
+                return "Nombre entier attendu"
             case .unusual:
-                "Score inhabituel\u{00A0}: vérifiez la saisie (habituellement entre "
-                    + "\(ScoreFormat.display(RoundEntryModel.usualScores.lowerBound)) et "
-                    + "\(ScoreFormat.display(RoundEntryModel.usualScores.upperBound)))."
+                let lower = ScoreFormat.display(RoundEntryModel.usualScores.lowerBound)
+                let upper = ScoreFormat.display(RoundEntryModel.usualScores.upperBound)
+                return "Score inhabituel\u{00A0}: vérifiez la saisie (habituellement entre \(lower) et \(upper))."
             case .empty, .signOnly, .value:
-                nil
+                return nil
             }
         }
 
@@ -605,7 +609,7 @@ final class RoundEntryModel {
         for field in missingFields {
             if field.inputMethod == .cards {
                 let missingCards = draft.entry(for: field.participantID)?.cardGrid.evaluate().missingCardCount ?? 0
-                reasons.append("\(Self.cardsItem(field.name)) (\(Self.missingCardsText(missingCards)))")
+                reasons.append("\(Self.cardsItem(field.name)) (\(CardGridPresentation.missingCardsText(missingCards)))")
             } else if field.status == .invalid {
                 reasons.append("score \(VerdictText.ofName(field.name)) à corriger")
             } else {
@@ -860,28 +864,34 @@ final class RoundEntryModel {
         "cartes \(VerdictText.ofName(name))"
     }
 
-    /// « 1 carte manquante », « 3 cartes manquantes ».
-    nonisolated static func missingCardsText(_ count: Int) -> String {
-        count > 1 ? "\(count) cartes manquantes" : "\(count) carte manquante"
-    }
-
     /// Information après une bascule cartes → points (`nil` si rien à signaler) : grille jamais
-    /// touchée ⇒ rien ; grille incomplète ⇒ invitation à saisir le total ou compléter les cartes ;
-    /// total des cartes différent d'un score saisi à la main ⇒ ce score est conservé (règle du Kit).
+    /// touchée ⇒ rien ; grille incomplète ⇒ invitation à saisir le total ou compléter les cartes
+    /// (en signalant un score conservé : manuel, ou issu de la grille avant modification) ; total
+    /// des cartes différent d'un score saisi à la main ⇒ ce score est conservé (règle du Kit).
     nonisolated static func cardsNotice(for entry: DraftEntry) -> String? {
         guard entry.inputMethod == .points, entry.cardGrid != CardGrid() else { return nil }
         guard let total = entry.cardGrid.evaluate().rawScore else {
-            if entry.points == nil {
+            guard let points = entry.points else {
                 return "La grille est incomplète\u{00A0}: saisissez le total à la main ou complétez les cartes."
             }
-            return "La grille est incomplète\u{00A0}: le score saisi à la main est conservé. "
-                + "Vérifiez-le ou complétez les cartes."
+            let shown = ScoreFormat.display(points)
+            if entry.isPointsDerivedFromGrid {
+                return "Le score affiché (\(shown)) provient de la grille avant modification. Vérifiez-le ou complétez les cartes."
+            }
+            return "La grille est incomplète\u{00A0}: le score saisi à la main (\(shown)) est conservé. Vérifiez-le ou complétez les cartes."
         }
-        if let points = entry.points, points != total {
-            return "Total des cartes\u{00A0}: \(ScoreFormat.display(total)). Le score saisi à la main "
-                + "(\(ScoreFormat.display(points))) est conservé\u{00A0}: corrigez-le si besoin."
-        }
-        return nil
+        guard let points = entry.points, points != total else { return nil }
+        let totalText = ScoreFormat.display(total)
+        let pointsText = ScoreFormat.display(points)
+        return "Total des cartes\u{00A0}: \(totalText). Le score saisi à la main (\(pointsText)) est conservé\u{00A0}: corrigez-le si besoin."
+    }
+
+    /// Premier joueur en mode « Cartes » dont la grille est incomplète (ordre d'affichage) : cible
+    /// du bouton « Suivant » du clavier après le dernier champ.
+    var firstIncompleteGridParticipantID: UUID? {
+        guard let draft else { return nil }
+        let missing = Set(draft.missingScoreParticipantIDs)
+        return fields.first { $0.inputMethod == .cards && missing.contains($0.participantID) }?.participantID
     }
 
     private static func earlyEndDecision(

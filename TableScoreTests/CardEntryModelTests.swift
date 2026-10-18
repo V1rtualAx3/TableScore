@@ -64,7 +64,7 @@ struct CardEntryModelTests {
         #expect(model.fields[0].inputMethod == .cards)
         #expect(model.fields[0].text == "12")
         #expect(!model.canSave)
-        #expect(model.blockingReasons == ["cartes d'Alice (12 cartes manquantes)"])
+        #expect(model.blockingReasons == ["cartes d'Alice (12\u{00A0}cartes à saisir)"])
         #expect(model.blockingSummary == "À compléter\u{00A0}: cartes d'Alice.")
         #expect(model.isDirty)
 
@@ -149,7 +149,38 @@ struct CardEntryModelTests {
         model.setCardGrid(grid, for: alice)
         let incompleteNotice = model.setInputMethod(.points, for: alice)
         #expect(model.fields[0].text == "18")
-        #expect(incompleteNotice?.hasPrefix("La grille est incomplète\u{00A0}: le score saisi à la main est conservé.") == true)
+        #expect(incompleteNotice == "La grille est incomplète\u{00A0}: le score saisi à la main (18) est conservé. Vérifiez-le ou complétez les cartes.")
+    }
+
+    @Test("Score pré-rempli puis grille rendue incomplète : l'information dit que le score vient de la grille")
+    func derivedPointsWithIncompleteGrid() throws {
+        let (model, _) = try Self.makeModel()
+        let alice = Self.id(model, 0)
+        model.setInputMethod(.cards, for: alice)
+        var grid = try Self.gridTotal20()
+        model.setCardGrid(grid, for: alice)
+        model.setInputMethod(.points, for: alice)
+        #expect(model.fields[0].text == "20")
+
+        model.setInputMethod(.cards, for: alice)
+        try grid.setCard(nil, column: 2, row: 1)
+        model.setCardGrid(grid, for: alice)
+        let notice = model.setInputMethod(.points, for: alice)
+        #expect(model.fields[0].text == "20")
+        #expect(notice == "Le score affiché (20) provient de la grille avant modification. Vérifiez-le ou complétez les cartes.")
+    }
+
+    @Test("« Suivant » après le dernier champ : première grille incomplète, sinon aucune")
+    func firstIncompleteGrid() throws {
+        let (model, _) = try Self.makeModel()
+        #expect(model.firstIncompleteGridParticipantID == nil)
+        model.setInputMethod(.cards, for: Self.id(model, 2))
+        model.setInputMethod(.cards, for: Self.id(model, 1))
+        #expect(model.firstIncompleteGridParticipantID == Self.id(model, 1))
+        model.setCardGrid(try Self.gridTotal20(), for: Self.id(model, 1))
+        #expect(model.firstIncompleteGridParticipantID == Self.id(model, 2))
+        model.setCardGrid(try Self.gridTotal20(), for: Self.id(model, 2))
+        #expect(model.firstIncompleteGridParticipantID == nil)
     }
 
     // MARK: Validation et total (Kit)
@@ -166,7 +197,7 @@ struct CardEntryModelTests {
         var grid = try Self.grid([[0, 1, 4, 0], [0, 2, 4, 0], [0, 3, 5, nil]])
         model.setCardGrid(grid, for: alice)
         #expect(!model.canSave)
-        #expect(model.blockingReasons == ["cartes d'Alice (1 carte manquante)"])
+        #expect(model.blockingReasons == ["cartes d'Alice (1\u{00A0}carte à saisir)"])
         #expect(model.preview == nil)
         #expect(model.save() == .ignored)
         #expect(try repository.game(id: Self.gameID).rounds.isEmpty)
@@ -304,9 +335,9 @@ struct CardEntryModelTests {
         model.setInputMethod(.cards, for: Self.id(model, 0))
         model.setInputMethod(.cards, for: Self.id(model, 2))
         #expect(model.blockingReasons == [
-            "cartes d'Alice (12 cartes manquantes)",
+            "cartes d'Alice (12\u{00A0}cartes à saisir)",
             "score de Bob",
-            "cartes de Chloé (12 cartes manquantes)",
+            "cartes de Chloé (12\u{00A0}cartes à saisir)",
             "qui a terminé la manche",
         ])
         #expect(model.blockingSummary == "À compléter\u{00A0}: 3 scores, qui a terminé la manche.")

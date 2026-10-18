@@ -18,6 +18,13 @@ struct ScoreEntryRow: View {
     let model: RoundEntryModel
     let focus: FocusState<UUID?>.Binding
 
+    /// Délai avant l'annonce d'une information de bascule : laisse VoiceOver finir d'annoncer le
+    /// changement de segment, qui sinon couvrirait l'annonce.
+    private static let noticeAnnouncementDelay: Duration = .milliseconds(600)
+
+    /// Identifiant de défilement de la ligne (bouton « Suivant » du clavier).
+    static func scrollAnchor(position: Int) -> String { "round.entry.\(position)" }
+
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .title2) private var fieldMinWidth: CGFloat = 76
 
@@ -29,7 +36,12 @@ struct ScoreEntryRow: View {
             }
             inputMethodPicker
             if field.inputMethod == .cards {
-                CardGridEditor(grid: gridBinding, playerName: field.name, position: field.position)
+                CardGridEditor(
+                    grid: gridBinding,
+                    playerName: field.name,
+                    position: field.position,
+                    onBeginEditing: releaseKeyboardFocus
+                )
             }
         }
         .padding(.vertical, Theme.Spacing.xs)
@@ -177,12 +189,12 @@ struct ScoreEntryRow: View {
             Text(verbatim: inputMethodLabel)
         }
         .pickerStyle(.segmented)
-        .fixedSize()
-        .accessibilityLabel(Text(verbatim: inputMethodLabel))
+        // Largeur naturelle ; en tailles d'accessibilité, toute la largeur (pas de débordement).
+        .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: false)
         .accessibilityIdentifier(AccessibilityID.Round.inputMethod(position: field.position))
     }
 
-    /// « Mode de saisie d'Alice » (le prénom est masqué pour VoiceOver dans la ligne).
+    /// « Mode de saisie d'Alice » (libellé du `Picker`).
     private var inputMethodLabel: String {
         "Mode de saisie \(VerdictText.ofName(field.name))"
     }
@@ -202,13 +214,22 @@ struct ScoreEntryRow: View {
                     focus.wrappedValue = nil
                 }
                 if let notice = model.setInputMethod(newValue, for: participantID) {
-                    AccessibilityNotification.Announcement(notice).post()
+                    Task {
+                        try? await Task.sleep(for: Self.noticeAnnouncementDelay)
+                        AccessibilityNotification.Announcement(notice).post()
+                    }
                 }
             }
         )
     }
 
     // MARK: Mode « Cartes »
+
+    /// Ouverture du sélecteur de valeur : le clavier d'un autre champ se ferme (il masquerait la feuille).
+    private var releaseKeyboardFocus: () -> Void {
+        let focus = focus
+        return { focus.wrappedValue = nil }
+    }
 
     /// Grille du brouillon (Kit) ; chaque modification repasse par le modèle, qui recalcule la
     /// validation et l'aperçu.

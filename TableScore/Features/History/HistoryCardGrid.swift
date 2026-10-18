@@ -39,9 +39,10 @@ struct HistoryCardsSheet: View {
 /// Grille finale enregistrée, en lecture seule : 4 colonnes verticales de 3 cartes, résultat de
 /// chaque colonne (texte, jamais la couleur seule), explications et total.
 ///
-/// Textes et libellés VoiceOver : `CardGridPresentation` (mêmes formulations que l'éditeur),
-/// elle-même dérivée de `CardGrid.evaluate()` du Kit ; aucun calcul ici. VoiceOver : un élément
-/// par colonne (« Colonne 1, 0 point, colonne non comptée », valeur « 7, 7, 7 »), puis le total.
+/// Textes, libellés VoiceOver et disposition (4 colonnes, 2 × 2 en tailles d'accessibilité) :
+/// `CardGridPresentation` et `CardGridColumnsLayout`, partagés avec l'éditeur ; valeurs dérivées
+/// de `CardGrid.evaluate()` du Kit, aucun calcul ici. VoiceOver : un élément par colonne
+/// (« Colonne 1, 0 point, colonne non comptée », valeur « 7, 7, 7 »), puis le total.
 struct HistoryCardGridView: View {
     let grid: CardGrid
     let playerName: String
@@ -52,10 +53,8 @@ struct HistoryCardGridView: View {
     var body: some View {
         let presentation = CardGridPresentation(grid: grid, playerName: playerName, position: position)
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            HStack(alignment: .top, spacing: Theme.Spacing.s) {
-                ForEach(presentation.columns) { column in
-                    columnView(column)
-                }
+            CardGridColumnsLayout { index in
+                columnView(presentation.columns[index])
             }
             ForEach(presentation.statusMessages, id: \.self) { message in
                 Label {
@@ -83,6 +82,9 @@ struct HistoryCardGridView: View {
 
     private func columnView(_ column: CardGridPresentation.Column) -> some View {
         VStack(spacing: Theme.Spacing.xs) {
+            Text(verbatim: column.title)
+                .font(.caption)
+                .foregroundStyle(Color.secondary)
             ForEach(column.cells) { cell in
                 cellView(cell)
             }
@@ -109,13 +111,11 @@ struct HistoryCardGridView: View {
         return Text(verbatim: cell.displayText)
             .font(Theme.Typography.entryScore)
             .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            // Colonne non comptée : valeur barrée et estompée, jamais effacée.
+            // Colonne non comptée : valeur barrée (texte secondaire, contraste conservé), jamais effacée.
             .strikethrough(cell.isExcluded && cell.value != nil)
             .foregroundStyle(cell.isExcluded || cell.value == nil ? Color.secondary : Color.primary)
             .frame(maxWidth: .infinity, minHeight: cellHeight)
             .background(shape.fill(Color(.tertiarySystemFill)))
-            .opacity(cell.isExcluded ? 0.6 : 1)
     }
 }
 

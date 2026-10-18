@@ -15,14 +15,16 @@ final class CardEntryUITests: XCTestCase {
     }
 
     /// Grille d'Alice, colonne 0 retirée : colonnes 1/2/3 (6), −2/−2/−2 (triplet non compté),
-    /// 0/1/0 (1) ⇒ 7. Valeurs dans l'ordre de saisie du composant : rangée par rangée, de gauche
-    /// à droite, colonne retirée ignorée, à partir de la case (colonne 1, rangée 0).
-    private static let aliceValuesInReadingOrder = [1, -2, 0, 2, -2, 1, 3, -2, 0]
+    /// 0/1/0 (1) ⇒ 7. Valeurs dans l'ordre de saisie du composant : colonne par colonne (haut →
+    /// bas), colonne retirée sautée, à partir de la case (colonne 1, rangée 0).
+    private static let aliceValuesInEntryOrder = [1, 2, 3, -2, -2, -2, 0, 1, 0]
 
+    /// Colonne 0 retirée par sa bascule (`cards.removeColumn.0.0`, exposée en bouton ou en
+    /// interrupteur : recherche par identifiant seul), puis 9 cartes ; la feuille se ferme seule.
     @MainActor
     private func enterAliceGrid(_ robot: CardEntryRobot) {
-        robot.tapRevealing(robot.app.buttons["cards.removeColumn.0.0"])
-        robot.fillCards(Self.aliceValuesInReadingOrder, position: 0, startColumn: 1, startRow: 0, closesWhenComplete: true)
+        robot.tapRevealing(robot.element("cards.removeColumn.0.0"))
+        robot.fillCards(Self.aliceValuesInEntryOrder, position: 0, startColumn: 1, startRow: 0)
     }
 
     // MARK: Scénarios
@@ -80,7 +82,7 @@ final class CardEntryUITests: XCTestCase {
         robot.openRoundEntry(seed: .nearEnd, expectedTitle: "Manche 4")
 
         robot.selectInputMethod("Cartes", position: 0)
-        robot.fillCards([5], position: 0, startColumn: 0, startRow: 0, closesWhenComplete: false)
+        robot.fillCards([5], position: 0, startColumn: 0, startRow: 0, completesGrid: false)
         robot.selectInputMethod("Points", position: 0)
 
         let notice = robot.element("round.cardsNotice.0")
@@ -93,6 +95,28 @@ final class CardEntryUITests: XCTestCase {
         let total = robot.element("cards.total.0")
         robot.reveal(total)
         XCTAssertTrue(total.label.contains("total brut 5 points, provisoire"), "Total partiel attendu 5 : \(total.label)")
+    }
+
+    /// « Colonne retirée » depuis le sélecteur de valeur (`cards.valuePicker.removeColumn`) : la
+    /// colonne de la case en cours est retirée et la saisie continue sur la colonne suivante.
+    @MainActor
+    func testRemoveColumnFromValuePicker() throws {
+        let robot = CardEntryRobot(app: XCUIApplication())
+        robot.openRoundEntry(seed: .nearEnd, expectedTitle: "Manche 4")
+
+        robot.selectInputMethod("Cartes", position: 0)
+        robot.tapRevealing(robot.app.buttons["cards.cell.0.0.0"])
+        let removeColumn = robot.element("cards.valuePicker.removeColumn")
+        XCTAssertTrue(removeColumn.waitForExistence(timeout: 5), "Bouton « Colonne retirée » du sélecteur attendu.")
+        removeColumn.tap()
+        robot.tapValues(Self.aliceValuesInEntryOrder, completesGrid: true)
+
+        let toggle = robot.element("cards.removeColumn.0.0")
+        robot.reveal(toggle)
+        XCTAssertEqual(toggle.value as? String, "activé", "La colonne 1 doit être marquée retirée.")
+        let total = robot.element("cards.total.0")
+        robot.reveal(total)
+        XCTAssertTrue(total.label.contains("total brut 7 points"), "Total de la grille attendu 7 : \(total.label)")
     }
 
     @MainActor
@@ -114,7 +138,7 @@ final class CardEntryUITests: XCTestCase {
         XCTAssertTrue(cardsSheet.waitForExistence(timeout: 5))
         let readOnlyTotal = robot.app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", "Alice, total brut 6 points")).firstMatch
-        XCTAssertTrue(readOnlyTotal.exists, "Total de la grille enregistrée attendu.")
+        XCTAssertTrue(readOnlyTotal.waitForExistence(timeout: 5), "Total de la grille enregistrée attendu.")
         cardsSheet.buttons["OK"].tap()
         XCTAssertTrue(robot.waitForDisappearance(of: cardsSheet), "La consultation doit se fermer.")
 
@@ -134,8 +158,8 @@ final class CardEntryUITests: XCTestCase {
 /// Actions de la feuille de saisie en mode cartes (défilement et touchers via `FormDriver`).
 ///
 /// Composant de grille (`CardGridEditor`) : toucher une case ouvre une feuille de valeurs ; chaque
-/// valeur choisie passe à la case vide suivante (rangée par rangée, colonnes retirées ignorées) ;
-/// la feuille se ferme d'elle-même quand la grille est complète, sinon par « OK ».
+/// valeur choisie passe à la case vide suivante (colonne par colonne, colonnes retirées sautées) ;
+/// la feuille se ferme d'elle-même quand la grille est complète.
 @MainActor
 private struct CardEntryRobot {
     let app: XCUIApplication
@@ -190,40 +214,55 @@ private struct CardEntryRobot {
         XCTAssertTrue(segment.isSelected, "Segment « \(title) » attendu sélectionné.", file: file, line: line)
     }
 
-    /// Touche la case de départ puis les valeurs dans l'ordre de saisie du composant. Grille
-    /// complétée : la feuille doit se fermer seule ; sinon elle est fermée par « OK ».
+    /// Touche la case de départ puis les valeurs dans l'ordre de saisie du composant.
     func fillCards(
         _ values: [Int],
         position: Int,
         startColumn: Int,
         startRow: Int,
-        closesWhenComplete: Bool,
+        completesGrid: Bool = true,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
         tapRevealing(app.buttons["cards.cell.\(position).\(startColumn).\(startRow)"], file: file, line: line)
-        let done = app.buttons["cards.valuePicker.done"]
-        XCTAssertTrue(done.waitForExistence(timeout: 5), "Sélecteur de valeur attendu.", file: file, line: line)
+        tapValues(values, completesGrid: completesGrid, file: file, line: line)
+    }
+
+    /// Valeurs successives dans le sélecteur ouvert. Grille complétée : la feuille doit se fermer
+    /// seule ; sinon elle est fermée par `closeValuePicker`.
+    func tapValues(_ values: [Int], completesGrid: Bool, file: StaticString = #filePath, line: UInt = #line) {
+        var lastButton: XCUIElement?
         for value in values {
             let valueButton = app.buttons["cards.valuePicker.\(value)"]
             XCTAssertTrue(valueButton.waitForExistence(timeout: 5), "Valeur \(value) attendue.", file: file, line: line)
-            if !valueButton.isHittable {
-                // Feuille à mi-hauteur trop petite (grande police) : l'agrandir.
-                app.swipeUp()
-            }
             valueButton.tap()
+            lastButton = valueButton
         }
-        if closesWhenComplete {
+        guard let lastButton else { return }
+        if completesGrid {
             XCTAssertTrue(
-                waitForDisappearance(of: done),
+                waitForDisappearance(of: lastButton),
                 "Grille complète : le sélecteur doit se fermer.",
                 file: file,
                 line: line
             )
         } else {
-            done.tap()
-            XCTAssertTrue(waitForDisappearance(of: done), "Le sélecteur doit se fermer.", file: file, line: line)
+            closeValuePicker(anyValue: lastButton, file: file, line: line)
         }
+    }
+
+    /// Ferme le sélecteur laissé ouvert (grille incomplète) : bouton « OK » s'il existe, sinon
+    /// glissement de la feuille vers le bas (geste système de fermeture).
+    func closeValuePicker(anyValue: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        let done = app.buttons["cards.valuePicker.done"]
+        if done.exists && done.isHittable {
+            done.tap()
+        } else {
+            let sheetTop = anyValue.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -2))
+            let bottom = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+            sheetTop.press(forDuration: 0.05, thenDragTo: bottom)
+        }
+        XCTAssertTrue(waitForDisappearance(of: anyValue), "Le sélecteur doit se fermer.", file: file, line: line)
     }
 
     func typeScore(_ text: String, position: Int, file: StaticString = #filePath, line: UInt = #line) {
