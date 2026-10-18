@@ -118,5 +118,7 @@ enum AccessibilityID {
         /// Sélecteur de valeur : « Effacer » (case vide) et « OK » (fermeture).
         static let valuePickerClear = "cards.valuePicker.clear"
         static let valuePickerDone = "cards.valuePicker.done"
+        /// Sélecteur de valeur : « Colonne N retirée » (colonne de la case courante).
+        static let valuePickerRemoveColumn = "cards.valuePicker.removeColumn"
     }
 }

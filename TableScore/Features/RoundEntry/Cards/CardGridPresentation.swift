@@ -3,22 +3,23 @@ import TableScoreKit
 
 /// Présentation **pure** de la grille finale d'un joueur (mode cartes, cahier §3.3).
 ///
-/// Aucune règle de score ici : statut des colonnes, sous-totaux et total proviennent exclusivement
-/// de `CardGrid.evaluate()` (Kit). Ce type ne fait que les mettre en forme (textes FR, libellés
-/// VoiceOver, identifiants) ; il est construit à chaque rendu et testé sans interface.
+/// Aucune règle de score ici : statut des colonnes (`ColumnOutcome`), sous-totaux et total
+/// proviennent exclusivement de `CardGrid.evaluate()` (Kit). Ce type ne fait que les mettre en
+/// forme (textes FR, libellés et annonces VoiceOver, identifiants) ; il est construit à chaque
+/// rendu et testé sans interface.
 ///
 /// Indices : `column` et `row` sont **0-based** (comme `CardGrid`) ; les textes affichés à
 /// l'utilisateur sont **1-based** (« colonne 2, rangée 1 » = `column: 1, row: 0`, rangée 1 = haut).
 ///
-/// Typographie : U+00A0 (insécable) avant « : » et entre un nombre et son unité.
+/// Typographie : U+00A0 (insécable) avant « : » et entre un nombre et le nom qui le suit.
 struct CardGridPresentation: Equatable, Sendable {
     /// Espace insécable.
     static let nbsp = "\u{00A0}"
     /// Texte d'une case vide (jamais « 0 » : zéro est une vraie valeur).
     static let emptyCellText = "—"
     /// Message du cahier §3.3, affiché pour un triplet identique (y compris négatif).
-    static let identicalCardsMessage = "3 cartes identiques\(nbsp): colonne non comptée"
-    /// Titre du bouton de bascule par colonne.
+    static let identicalCardsMessage = "3\(nbsp)cartes identiques\(nbsp): colonne non comptée"
+    /// Titre visible du bouton de bascule par colonne (cahier §3.3).
     static let removeColumnTitle = "Colonne retirée"
 
     /// Emplacement d'une carte (indices 0-based).
@@ -27,33 +28,11 @@ struct CardGridPresentation: Equatable, Sendable {
         let row: Int
     }
 
-    /// État d'une colonne verticale, tel que calculé par le Kit.
-    enum ColumnStatus: Equatable, Sendable {
-        /// Trois cartes renseignées, non identiques : la colonne compte leur somme.
-        case complete(sum: Int)
-        /// Au moins une carte manquante : somme provisoire des cartes saisies.
-        case incomplete(enteredSum: Int, missingCount: Int)
-        /// Bouton « Colonne retirée » : compte 0, valeurs conservées mais ignorées.
-        case markedRemoved
-        /// Trois cartes identiques saisies : retrait automatique, compte 0, valeurs conservées.
-        case identicalCards(value: Int)
-
-        init(_ outcome: ColumnOutcome) {
-            switch outcome {
-            case .counted(let sum): self = .complete(sum: sum)
-            case .incomplete(let enteredSum, let missingCount):
-                self = .incomplete(enteredSum: enteredSum, missingCount: missingCount)
-            case .markedRemoved: self = .markedRemoved
-            case .identicalCards(let value): self = .identicalCards(value: value)
-            }
-        }
-    }
-
     struct Cell: Equatable, Sendable, Identifiable {
         let position: CellPosition
         /// `nil` = case vide (distincte de `0`).
         let value: Int?
-        /// Colonne retirée ou triplet identique : case estompée (valeur conservée).
+        /// Colonne retirée ou triplet identique : valeur barrée (conservée).
         let isExcluded: Bool
         /// Faux si la colonne est marquée retirée (re-basculer la colonne pour corriger).
         let isEditable: Bool
@@ -73,11 +52,10 @@ struct CardGridPresentation: Equatable, Sendable {
     struct Column: Equatable, Sendable, Identifiable {
         /// Indice 0-based.
         let index: Int
-        let status: ColumnStatus
+        /// Résultat calculé par le Kit.
+        let outcome: ColumnOutcome
         /// Haut → bas (toujours `CardGrid.rowCount` cases).
         let cells: [Cell]
-        /// Contribution au total en direct (0 si retirée ou triplet identique).
-        let contribution: Int
         /// Valeur du bouton « Colonne retirée ».
         let isMarkedRemoved: Bool
         /// « Colonne 2 ».
@@ -90,16 +68,18 @@ struct CardGridPresentation: Equatable, Sendable {
         let shortStatus: String?
         /// Explication complète (sous la grille) ; `nil` si la colonne compte normalement.
         let statusMessage: String?
-        /// Libellé VoiceOver du bouton de bascule : « Colonne 2 retirée ».
+        /// Libellé VoiceOver de la bascule : « Retirer la colonne 2 » (valeur activé/désactivé).
         let removeToggleAccessibilityLabel: String
         let removeToggleIdentifier: String
 
         var id: Int { index }
+        /// Contribution au total en direct (0 si retirée ou triplet identique).
+        var contribution: Int { outcome.runningContribution }
         /// Colonne ne contribuant pas (retrait manuel ou triplet identique).
         var isExcluded: Bool {
-            switch status {
+            switch outcome {
             case .markedRemoved, .identicalCards: true
-            case .complete, .incomplete: false
+            case .counted, .incomplete: false
             }
         }
     }
@@ -143,7 +123,7 @@ struct CardGridPresentation: Equatable, Sendable {
         return Self.missingCardsText(missingCardCount)
     }
 
-    /// Texte sous le total : cartes manquantes ou « Grille complète ».
+    /// Texte sous le total : cartes à saisir ou « Grille complète ».
     var completionText: String { missingCardsText ?? "Grille complète" }
 
     /// Total affiché (signe moins typographique).
@@ -166,30 +146,33 @@ struct CardGridPresentation: Equatable, Sendable {
         }
     }
 
-    func cell(at position: CellPosition) -> Cell? {
-        guard columns.indices.contains(position.column),
-              columns[position.column].cells.indices.contains(position.row)
-        else { return nil }
-        return columns[position.column].cells[position.row]
-    }
-
-    /// En-tête du sélecteur de valeur : « Colonne 2, rangée 1 ».
+    /// « Colonne 2, rangée 1 ».
     static func positionTitle(_ position: CellPosition) -> String {
         "Colonne \(position.column + 1), rangée \(position.row + 1)"
     }
 
+    /// En-tête (une ligne) du sélecteur de valeur : « Alice · colonne 2, rangée 1 ».
+    static func pickerTitle(playerName: String, position: CellPosition) -> String {
+        "\(playerName) · colonne \(position.column + 1), rangée \(position.row + 1)"
+    }
+
+    /// Bouton du sélecteur : « Colonne 2 retirée ».
+    static func removeColumnFromPickerTitle(column: Int) -> String {
+        "Colonne \(column + 1) retirée"
+    }
+
     // MARK: Navigation de saisie
 
-    /// Prochaine case vide à saisir après `position`, dans l'ordre de lecture (rangée par rangée,
-    /// de gauche à droite), en reprenant au début ; les colonnes marquées retirées sont ignorées.
+    /// Prochaine case vide à saisir après `position`, **colonne par colonne** (haut → bas, puis
+    /// colonne suivante), en reprenant au début ; les colonnes marquées retirées sont sautées.
     /// `nil` si aucune case modifiable n'est vide (grille terminée).
     static func nextEmptyCell(in grid: CardGrid, after position: CellPosition) -> CellPosition? {
-        let columnCount = CardGrid.columnCount
-        let total = columnCount * CardGrid.rowCount
-        let start = position.row * columnCount + position.column
+        let rowCount = CardGrid.rowCount
+        let total = CardGrid.columnCount * rowCount
+        let start = position.column * rowCount + position.row
         for step in 1...total {
             let linear = (start + step) % total
-            let candidate = CellPosition(column: linear % columnCount, row: linear / columnCount)
+            let candidate = CellPosition(column: linear / rowCount, row: linear % rowCount)
             let column = grid.columns[candidate.column]
             if !column.isMarkedRemoved, column[candidate.row] == nil {
                 return candidate
@@ -198,8 +181,49 @@ struct CardGridPresentation: Equatable, Sendable {
         return nil
     }
 
+    // MARK: Annonces VoiceOver
+
+    /// Après le choix d'une valeur : « 7 saisi. Colonne 2, rangée 1 » ; mentionne un triplet
+    /// apparu dans la colonne, puis la case suivante ou « Grille complète, total brut N points ».
+    static func pickAnnouncement(
+        value: Int,
+        column: Int,
+        before: CardGrid,
+        after: CardGrid,
+        next: CellPosition?
+    ) -> String {
+        var parts = ["\(ScoreFormat.spoken(value)) saisi."]
+        if case .identicalCards = after.columns[column].outcome,
+           !isIdentical(before.columns[column].outcome) {
+            parts.append("\(identicalCardsMessage).")
+        }
+        parts.append(continuation(grid: after, next: next))
+        return parts.joined(separator: " ")
+    }
+
+    /// Après « Colonne N retirée » depuis le sélecteur : « Colonne 2 retirée. Colonne 3, rangée 1 ».
+    static func removalAnnouncement(column: Int, grid: CardGrid, next: CellPosition?) -> String {
+        "\(removeColumnFromPickerTitle(column: column)). \(continuation(grid: grid, next: next))"
+    }
+
+    /// Case suivante, ou bilan quand il n'en reste aucune.
+    static func continuation(grid: CardGrid, next: CellPosition?) -> String {
+        if let next { return positionTitle(next) }
+        let evaluation = grid.evaluate()
+        guard let raw = evaluation.rawScore else {
+            return missingCardsText(evaluation.missingCardCount)
+        }
+        return "Grille complète, total brut \(spokenPoints(raw))"
+    }
+
+    private static func isIdentical(_ outcome: ColumnOutcome) -> Bool {
+        if case .identicalCards = outcome { return true }
+        return false
+    }
+
     // MARK: Formatage
 
+    /// « 1 carte à saisir », « 3 cartes à saisir » (espace insécable après le nombre).
     static func missingCardsText(_ count: Int) -> String {
         count == 1 ? "1\(nbsp)carte à saisir" : "\(count)\(nbsp)cartes à saisir"
     }
@@ -222,25 +246,20 @@ struct CardGridPresentation: Equatable, Sendable {
         playerName: String,
         position: Int
     ) -> Column {
-        let status = ColumnStatus(outcome)
         let title = "Colonne \(index + 1)"
-        let isExcluded: Bool
         let cellSuffix: String?
         let shortStatus: String?
         let statusMessage: String?
-        switch status {
+        switch outcome {
         case .markedRemoved:
-            isExcluded = true
             cellSuffix = "colonne retirée"
             shortStatus = "Retirée"
             statusMessage = "colonne retirée\(nbsp): compte 0"
         case .identicalCards:
-            isExcluded = true
             cellSuffix = "colonne non comptée"
             shortStatus = "Non comptée"
             statusMessage = identicalCardsMessage
-        case .complete, .incomplete:
-            isExcluded = false
+        case .counted, .incomplete:
             cellSuffix = nil
             shortStatus = nil
             statusMessage = nil
@@ -252,7 +271,7 @@ struct CardGridPresentation: Equatable, Sendable {
             return Cell(
                 position: CellPosition(column: index, row: row),
                 value: value,
-                isExcluded: isExcluded,
+                isExcluded: cellSuffix != nil,
                 isEditable: !column.isMarkedRemoved,
                 displayText: value.map(ScoreFormat.display) ?? emptyCellText,
                 accessibilityLabel: "\(playerName), colonne \(index + 1), rangée \(row + 1)",
@@ -262,28 +281,24 @@ struct CardGridPresentation: Equatable, Sendable {
         }
 
         let contribution = outcome.runningContribution
-        let subtotalLabel: String
-        switch status {
-        case .incomplete(_, let missing):
-            subtotalLabel = "\(title), \(spokenPoints(contribution)), provisoire, \(missingCardsText(missing))"
-        case .markedRemoved, .identicalCards:
-            subtotalLabel = "\(title), \(spokenPoints(contribution)), \(cellSuffix ?? "")"
-        case .complete:
-            subtotalLabel = "\(title), \(spokenPoints(contribution))"
+        var subtotalLabel = "\(title), \(spokenPoints(contribution))"
+        if case .incomplete(_, let missing) = outcome {
+            subtotalLabel += ", provisoire, \(missingCardsText(missing))"
+        } else if let cellSuffix {
+            subtotalLabel += ", \(cellSuffix)"
         }
 
         return Column(
             index: index,
-            status: status,
+            outcome: outcome,
             cells: cells,
-            contribution: contribution,
             isMarkedRemoved: column.isMarkedRemoved,
             title: title,
             subtotalText: ScoreFormat.display(contribution),
             subtotalAccessibilityLabel: subtotalLabel,
             shortStatus: shortStatus,
             statusMessage: statusMessage,
-            removeToggleAccessibilityLabel: "\(title) retirée",
+            removeToggleAccessibilityLabel: "Retirer la colonne \(index + 1)",
             removeToggleIdentifier: AccessibilityID.Cards.removeColumn(position: position, column: index)
         )
     }

@@ -1,45 +1,60 @@
+import Accessibility
 import SwiftUI
 import TableScoreKit
 
 /// Grille finale d'**un** joueur en mode cartes (cahier §3.3) : 3 rangées × 4 colonnes
-/// verticales, bouton « Colonne retirée » par colonne, total brut en direct.
+/// verticales, bascule « Colonne retirée » au-dessus de chaque colonne, total brut en direct.
 ///
 /// Aide au décompte final uniquement (aucune simulation de partie). Toute valeur affichée vient de
 /// `CardGridPresentation`, elle-même dérivée de `CardGrid.evaluate()` (Kit) : la grille liée est
 /// l'unique source de vérité, l'éditeur n'en garde aucune copie.
 ///
-/// Mise en page : 4 colonnes côte à côte ; en tailles d'accessibilité, 2 × 2 colonnes (chaque
-/// colonne reste verticale, titrée « Colonne n ») — jamais de défilement horizontal.
-/// Le prénom n'est pas affiché en titre (responsabilité du conteneur) ; il sert aux libellés
-/// VoiceOver et à l'en-tête du sélecteur. Tous les boutons ont un style explicite : l'éditeur
-/// peut être placé dans une ligne de `Form`/`List` sans que la ligne entière ne réagisse.
+/// Mise en page : `CardGridColumnsLayout` (4 colonnes, ou 2 × 2 en tailles d'accessibilité ;
+/// jamais de défilement horizontal). Le prénom n'est pas affiché en titre (responsabilité du
+/// conteneur). Tous les boutons ont un style explicite : l'éditeur peut être placé dans une ligne
+/// de `Form`/`List` sans que la ligne entière ne réagisse.
+///
+/// `onBeginEditing` est appelé à l'ouverture du sélecteur de valeur (ex. retirer le focus clavier).
 struct CardGridEditor: View {
     @Binding private var grid: CardGrid
     private let playerName: String
     private let position: Int
+    private let onBeginEditing: () -> Void
 
     /// Case en cours de saisie (feuille du sélecteur ouverte).
     @State private var selectedCell: CardGridPresentation.CellPosition?
     @State private var isPickerPresented = false
 
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .title2) private var cellHeight: CGFloat = 52
 
-    init(grid: Binding<CardGrid>, playerName: String, position: Int) {
+    init(
+        grid: Binding<CardGrid>,
+        playerName: String,
+        position: Int,
+        onBeginEditing: @escaping () -> Void = {}
+    ) {
         _grid = grid
         self.playerName = playerName
         self.position = position
+        self.onBeginEditing = onBeginEditing
     }
 
     var body: some View {
         let presentation = CardGridPresentation(grid: grid, playerName: playerName, position: position)
+        let highlighted = isPickerPresented ? selectedCell : nil
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            columnsLayout(presentation)
-            if !presentation.statusMessages.isEmpty {
-                statusMessages(presentation)
+            CardGridColumnsLayout { index in
+                CardGridColumnView(
+                    column: presentation.columns[index],
+                    selectedCell: highlighted,
+                    onSelect: { select($0) },
+                    onToggleRemoved: { toggleRemoved(column: $0) }
+                )
             }
-            totalRow(presentation)
+            if !presentation.statusMessages.isEmpty {
+                CardGridStatusMessages(messages: presentation.statusMessages)
+            }
+            CardGridTotalRow(presentation: presentation)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: "Grille \(VerdictText.ofName(playerName))"))
@@ -48,82 +63,138 @@ struct CardGridEditor: View {
         }
     }
 
-    // MARK: Colonnes
-
     @ViewBuilder
-    private func columnsLayout(_ presentation: CardGridPresentation) -> some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            // 2 × 2 : colonnes 1-2 puis 3-4, chacune toujours verticale.
-            VStack(spacing: Theme.Spacing.l) {
-                ForEach([0, 2], id: \.self) { first in
-                    HStack(alignment: .top, spacing: Theme.Spacing.s) {
-                        ForEach(presentation.columns[first..<(first + 2)]) { column in
-                            columnView(column)
-                        }
-                    }
-                }
-            }
-        } else {
-            HStack(alignment: .top, spacing: Theme.Spacing.s) {
-                ForEach(presentation.columns) { column in
-                    columnView(column)
-                }
-            }
+    private var pickerSheet: some View {
+        if let cell = selectedCell {
+            CardValuePicker(
+                playerName: playerName,
+                cellPosition: cell,
+                currentValue: grid.columns[cell.column][cell.row],
+                onPick: { pick($0, at: cell) },
+                onRemoveColumn: { removeColumnFromPicker(at: cell) },
+                onDone: { isPickerPresented = false }
+            )
         }
     }
 
-    private func columnView(_ column: CardGridPresentation.Column) -> some View {
+    // MARK: Actions
+
+    private func select(_ cell: CardGridPresentation.CellPosition) {
+        selectedCell = cell
+        if !isPickerPresented {
+            onBeginEditing()
+            isPickerPresented = true
+        }
+    }
+
+    /// Bascule de la grille. Si la colonne de la case en cours est retirée, la saisie avance.
+    private func toggleRemoved(column index: Int) {
+        let isRemoving = !grid.columns[index].isMarkedRemoved
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            // Indice issu de la présentation (0..<4) : l'erreur de position est impossible.
+            _ = try? grid.setColumnRemoved(isRemoving, column: index)
+        }
+        if isRemoving, isPickerPresented, let cell = selectedCell, cell.column == index {
+            move(to: CardGridPresentation.nextEmptyCell(in: grid, after: cell))
+        }
+    }
+
+    /// Affecte la valeur, annonce, puis passe à la case vide suivante ; ferme la feuille quand il
+    /// n'en reste aucune (correction d'une grille complète : un toucher). « Effacer » reste sur place.
+    private func pick(_ value: Int?, at cell: CardGridPresentation.CellPosition) {
+        let before = grid
+        // Valeur issue de `CardGrid.cardValues` et position de la présentation : jamais invalides.
+        _ = try? grid.setCard(value, column: cell.column, row: cell.row)
+        guard let value else {
+            announce("Case vide")
+            return
+        }
+        let next = CardGridPresentation.nextEmptyCell(in: grid, after: cell)
+        announce(CardGridPresentation.pickAnnouncement(
+            value: value, column: cell.column, before: before, after: grid, next: next
+        ))
+        move(to: next)
+    }
+
+    private func removeColumnFromPicker(at cell: CardGridPresentation.CellPosition) {
+        _ = try? grid.setColumnRemoved(true, column: cell.column)
+        let next = CardGridPresentation.nextEmptyCell(in: grid, after: cell)
+        announce(CardGridPresentation.removalAnnouncement(column: cell.column, grid: grid, next: next))
+        move(to: next)
+    }
+
+    private func move(to next: CardGridPresentation.CellPosition?) {
+        if let next {
+            selectedCell = next
+        } else {
+            isPickerPresented = false
+        }
+    }
+
+    /// Priorité haute : l'annonce n'est pas interrompue par la mise à jour de la feuille.
+    private func announce(_ text: String) {
+        var message = AttributedString(text)
+        message.accessibilitySpeechAnnouncementPriority = .high
+        AccessibilityNotification.Announcement(message).post()
+    }
+}
+
+// MARK: - Sous-vues (corps courts : temps de compilation)
+
+/// Une colonne verticale : titre, bascule « Colonne retirée » (au-dessus), 3 cases, sous-total.
+private struct CardGridColumnView: View {
+    let column: CardGridPresentation.Column
+    let selectedCell: CardGridPresentation.CellPosition?
+    let onSelect: (CardGridPresentation.CellPosition) -> Void
+    let onToggleRemoved: (Int) -> Void
+
+    var body: some View {
         VStack(spacing: Theme.Spacing.s) {
             Text(verbatim: column.title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .accessibilityHidden(true) // déjà dans le libellé de chaque case
-
+            CardColumnRemovalToggle(column: column, onToggle: { onToggleRemoved(column.index) })
             ForEach(column.cells) { cell in
-                cellButton(cell)
+                CardCellButton(
+                    cell: cell,
+                    isSelected: selectedCell == cell.position,
+                    onSelect: { onSelect(cell.position) }
+                )
             }
-
-            subtotal(column)
-            removeToggle(column)
+            CardColumnSubtotal(column: column)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
     }
+}
 
-    private func cellButton(_ cell: CardGridPresentation.Cell) -> some View {
-        let isSelected = isPickerPresented && selectedCell == cell.position
-        let shape = RoundedRectangle(cornerRadius: Theme.Spacing.s)
-        return Button {
-            selectedCell = cell.position
-            isPickerPresented = true
-        } label: {
+/// Case : « — » et contour pointillé si vide ; fond plein dès qu'une valeur (y compris 0) est
+/// saisie. Colonne non comptée : valeur barrée, couleur secondaire et mention VoiceOver.
+private struct CardCellButton: View {
+    let cell: CardGridPresentation.Cell
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    @Environment(\.colorSchemeContrast) private var contrast
+    @ScaledMetric(relativeTo: .title2) private var cellHeight: CGFloat = 52
+
+    var body: some View {
+        Button(action: onSelect) {
             Text(verbatim: cell.displayText)
                 .font(Theme.Typography.entryScore)
                 .monospacedDigit()
                 .lineLimit(1)
-                // Retrait (manuel ou triplet) : valeur barrée et estompée, jamais effacée.
                 .strikethrough(cell.isExcluded && cell.value != nil)
-                .foregroundStyle(cell.value == nil ? Color.secondary : Color.primary)
+                .foregroundStyle(textStyle)
                 .frame(maxWidth: .infinity, minHeight: max(cellHeight, Theme.Size.minTapTarget))
-                .background {
-                    // Case vide : contour pointillé et « — » ; case renseignée (y compris 0) : fond plein.
-                    if cell.value == nil {
-                        shape.strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                    } else {
-                        shape.fill(Color(.tertiarySystemFill))
-                    }
-                }
-                .overlay {
-                    if isSelected {
-                        shape.strokeBorder(Theme.Palette.accent, lineWidth: 3)
-                    }
-                }
-                .contentShape(shape)
+                .background { background }
+                .overlay { selectionRing }
+                .contentShape(RoundedRectangle(cornerRadius: Theme.Spacing.s))
         }
         .buttonStyle(.plain)
         .disabled(!cell.isEditable)
-        .opacity(cell.isExcluded ? 0.5 : 1)
         .accessibilityLabel(Text(verbatim: cell.accessibilityLabel))
         .accessibilityValue(Text(verbatim: cell.accessibilityValue))
         .accessibilityHint(cell.isEditable ? Text("Choisir la valeur de la carte") : Text("Rétablir la colonne pour modifier"))
@@ -131,7 +202,76 @@ struct CardGridEditor: View {
         .accessibilityIdentifier(cell.accessibilityIdentifier)
     }
 
-    private func subtotal(_ column: CardGridPresentation.Column) -> some View {
+    private var isIncreasedContrast: Bool { contrast == .increased }
+
+    private var textStyle: Color {
+        if cell.value == nil { return isIncreasedContrast ? .primary : .secondary }
+        if cell.isExcluded { return isIncreasedContrast ? .primary : .secondary }
+        return .primary
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Spacing.s)
+        if cell.value == nil {
+            shape.strokeBorder(
+                isIncreasedContrast ? Color.primary : Color.secondary,
+                style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+            )
+        } else {
+            shape.fill(Color(uiColor: .tertiarySystemFill))
+        }
+    }
+
+    @ViewBuilder
+    private var selectionRing: some View {
+        if isSelected {
+            RoundedRectangle(cornerRadius: Theme.Spacing.s)
+                .strokeBorder(Theme.Palette.accent, lineWidth: 3)
+        }
+    }
+}
+
+/// Bascule « Colonne retirée » : la colonne compte 0, ses valeurs sont conservées (re-basculer
+/// les restaure). État porté par le symbole (case cochée), pas seulement la couleur ;
+/// VoiceOver : « Retirer la colonne 2, activé/désactivé, bouton bascule ».
+private struct CardColumnRemovalToggle: View {
+    let column: CardGridPresentation.Column
+    let onToggle: () -> Void
+
+    var body: some View {
+        let isOn = column.isMarkedRemoved
+        Button(action: onToggle) {
+            VStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                    .font(.body)
+                Text(verbatim: CardGridPresentation.removeColumnTitle)
+                    .font(.caption2)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .foregroundStyle(isOn ? Theme.Palette.accent : Color.primary)
+            .padding(Theme.Spacing.xs)
+            .frame(maxWidth: .infinity, minHeight: Theme.Size.minTapTarget)
+            .background {
+                RoundedRectangle(cornerRadius: Theme.Spacing.s)
+                    .fill(isOn ? Theme.Palette.accent.opacity(0.15) : Color(uiColor: .tertiarySystemFill))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Spacing.s))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: column.removeToggleAccessibilityLabel))
+        .accessibilityValue(isOn ? Text("activé") : Text("désactivé"))
+        .accessibilityHint(Text("La colonne compte 0. Les valeurs saisies sont conservées."))
+        .accessibilityAddTraits(.isToggle)
+        .accessibilityIdentifier(column.removeToggleIdentifier)
+    }
+}
+
+private struct CardColumnSubtotal: View {
+    let column: CardGridPresentation.Column
+
+    var body: some View {
         VStack(spacing: Theme.Spacing.xs) {
             Text(verbatim: column.subtotalText)
                 .font(.headline)
@@ -146,54 +286,19 @@ struct CardGridEditor: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: column.subtotalAccessibilityLabel))
     }
+}
 
-    /// Bascule « Colonne retirée » : la colonne compte 0, ses valeurs sont conservées (re-basculer
-    /// les restaure). État porté par le symbole (case cochée) et le texte, pas seulement la couleur.
-    private func removeToggle(_ column: CardGridPresentation.Column) -> some View {
-        let isOn = column.isMarkedRemoved
-        let index = column.index
-        let shape = RoundedRectangle(cornerRadius: Theme.Spacing.s)
-        return Button {
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                // Indice issu de la présentation (0..<4) : l'erreur de position est impossible.
-                _ = try? grid.setColumnRemoved(!isOn, column: index)
-            }
-        } label: {
-            VStack(spacing: Theme.Spacing.xs) {
-                Image(systemName: isOn ? "checkmark.square.fill" : "square")
-                    .font(.body)
-                Text(CardGridPresentation.removeColumnTitle)
-                    .font(.caption2)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .foregroundStyle(isOn ? Theme.Palette.accent : Color.primary)
-            .padding(.vertical, Theme.Spacing.xs)
-            .padding(.horizontal, Theme.Spacing.xs)
-            .frame(maxWidth: .infinity, minHeight: Theme.Size.minTapTarget)
-            .background {
-                shape.fill(isOn ? Theme.Palette.accent.opacity(0.15) : Color(.tertiarySystemFill))
-            }
-            .contentShape(shape)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Text(verbatim: column.removeToggleAccessibilityLabel))
-        .accessibilityValue(isOn ? Text("activé") : Text("désactivé"))
-        .accessibilityHint(Text("La colonne compte 0. Les valeurs saisies sont conservées."))
-        .accessibilityAddTraits(.isToggle)
-        .accessibilityIdentifier(column.removeToggleIdentifier)
-    }
+private struct CardGridStatusMessages: View {
+    let messages: [String]
 
-    // MARK: Messages et total
-
-    private func statusMessages(_ presentation: CardGridPresentation) -> some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            ForEach(presentation.statusMessages, id: \.self) { message in
+            ForEach(messages, id: \.self) { message in
                 Label {
                     Text(verbatim: message)
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
-                    Image(systemName: Self.excludedSymbol)
+                    Image(systemName: "nosign")
                         .foregroundStyle(.secondary)
                 }
                 .font(Theme.Typography.detail)
@@ -201,21 +306,15 @@ struct CardGridEditor: View {
             }
         }
     }
+}
 
-    @ViewBuilder
-    private func totalRow(_ presentation: CardGridPresentation) -> some View {
-        let caption = VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text("Total brut")
-                .font(.headline)
-            Label {
-                Text(verbatim: presentation.completionText)
-            } icon: {
-                Image(systemName: presentation.isComplete ? Theme.Symbol.selected : Theme.Symbol.warning)
-                    .foregroundStyle(presentation.isComplete ? Theme.Palette.accent : Theme.Palette.warning)
-            }
-            .font(Theme.Typography.detail)
-            .foregroundStyle(presentation.isComplete ? Color.secondary : Color.primary)
-        }
+/// « Total brut » + état (cartes à saisir / grille complète, symbole + texte) + total en grand.
+private struct CardGridTotalRow: View {
+    let presentation: CardGridPresentation
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
         Group {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: Theme.Spacing.s) {
@@ -235,39 +334,21 @@ struct CardGridEditor: View {
         .accessibilityIdentifier(presentation.totalIdentifier)
     }
 
-    // MARK: Sélecteur de valeur
-
-    @ViewBuilder
-    private var pickerSheet: some View {
-        if let selectedCell {
-            CardValuePicker(
-                playerName: playerName,
-                cellPosition: selectedCell,
-                currentValue: grid.columns[selectedCell.column][selectedCell.row],
-                onPick: { pick($0, at: selectedCell) },
-                onDone: { isPickerPresented = false }
-            )
-            .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
-            .presentationDragIndicator(.visible)
+    private var caption: some View {
+        let isComplete = presentation.isComplete
+        return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Text("Total brut")
+                .font(.headline)
+            Label {
+                Text(verbatim: presentation.completionText)
+            } icon: {
+                Image(systemName: isComplete ? Theme.Symbol.selected : Theme.Symbol.warning)
+                    .foregroundStyle(isComplete ? Theme.Palette.accent : Theme.Palette.warning)
+            }
+            .font(Theme.Typography.detail)
+            .foregroundStyle(isComplete ? Color.secondary : Color.primary)
         }
     }
-
-    /// Affecte la valeur puis, si une valeur a été choisie, passe à la case vide suivante ; ferme
-    /// la feuille quand il n'en reste aucune (correction d'une grille déjà complète : un toucher).
-    /// « Effacer » reste sur la case.
-    private func pick(_ value: Int?, at cell: CardGridPresentation.CellPosition) {
-        // Valeur issue de `CardGrid.cardValues` et position de la présentation : jamais invalides.
-        _ = try? grid.setCard(value, column: cell.column, row: cell.row)
-        guard value != nil else { return }
-        if let next = CardGridPresentation.nextEmptyCell(in: grid, after: cell) {
-            selectedCell = next
-            AccessibilityNotification.Announcement(CardGridPresentation.positionTitle(next)).post()
-        } else {
-            isPickerPresented = false
-        }
-    }
-
-    private static let excludedSymbol = "nosign"
 }
 
 #if DEBUG
