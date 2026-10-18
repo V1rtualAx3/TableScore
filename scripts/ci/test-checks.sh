@@ -106,32 +106,88 @@ rc=0; out="$(OTOOL="$stubs/otool" NM="$stubs/nm" STUB_NM_FILE="$tmp/nm.txt" STUB
   bash "$here/check-binary.sh" "$tmp/dd" 2>&1)" || rc=$?
 if [ "$rc" -eq 0 ]; then echo "ok  binary Vision/AVFoundation permis"; else echo "KO  binary Vision/AVFoundation : $out"; failed=1; fi
 
-# --- check-info-plist.sh : plutil factice (JSON fourni), vrai jq ---
-run_plist() { # json [variables...] -> code dans rc, sortie dans out
-  local json="$1"; shift
-  printf '%s\n' "$json" >"$tmp/plist.json"
+# --- check-info-plist.sh : plutil factice (renvoie du XML plist fourni), sans jq ---
+plist_xml() { # corps_racine -> plist xml1 complet
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n%s\n</plist>\n' "$1"
+}
+run_plist() { # xml [variables...] -> code dans rc, sortie dans out
+  local xml="$1"; shift
+  printf '%s\n' "$xml" >"$tmp/plist.xml"
   : >"$tmp/dd/Build/Products/Release-iphonesimulator/TableScore.app/Info.plist"
   rc=0
-  out="$(env PLUTIL="$stubs/plutil" STUB_PLUTIL_FILE="$tmp/plist.json" "$@" bash "$here/check-info-plist.sh" "$tmp/dd" 2>&1)" || rc=$?
+  out="$(env PLUTIL="$stubs/plutil" STUB_PLUTIL_FILE="$tmp/plist.xml" "$@" bash "$here/check-info-plist.sh" "$tmp/dd" 2>&1)" || rc=$?
 }
-expect_plist() { # nom code_attendu json [variables...]
-  local name="$1" expected="$2"; shift 2
+expect_plist_ok() { # nom xml [variables...]
+  local name="$1"; shift
   run_plist "$@"
-  if [ "$rc" -eq "$expected" ]; then echo "ok  info-plist $name"; else echo "KO  info-plist $name (code $rc) : $out"; failed=1; fi
+  if [ "$rc" -eq 0 ] && grep -qF -- "OK : Info.plist produit" <<<"$out"; then echo "ok  info-plist $name"; else echo "KO  info-plist $name (code $rc) : $out"; failed=1; fi
 }
-expect_plist "caméra seule" 0 '{"CFBundleDisplayName":"TableScore","NSCameraUsageDescription":"TableScore utilise l appareil photo."}'
-expect_plist "sans permission" 0 '{"CFBundleDisplayName":"TableScore"}'
-expect_plist "micro" 1 '{"NSCameraUsageDescription":"x","NSMicrophoneUsageDescription":"x"}'
-expect_plist "photothèque" 1 '{"NSPhotoLibraryUsageDescription":"x"}'
-expect_plist "réseau local" 1 '{"NSLocalNetworkUsageDescription":"x"}'
-expect_plist "ATS" 1 '{"NSAppTransportSecurity":{"NSAllowsArbitraryLoads":true}}'
-expect_plist "arrière-plan" 1 '{"UIBackgroundModes":["audio"]}'
-expect_plist "Bonjour" 1 '{"NSBonjourServices":["_x._tcp"]}'
-expect_plist "caméra vide" 1 '{"NSCameraUsageDescription":"  "}'
-expect_plist "caméra non textuelle" 1 '{"NSCameraUsageDescription":true}'
-expect_plist "racine non dictionnaire" 1 '["NSCameraUsageDescription"]'
-expect_plist "plutil en échec" 1 '{}' STUB_PLUTIL_FAIL=1
+expect_plist_fail() { # nom message_attendu xml [variables...]
+  local name="$1" msg="$2"; shift 2
+  run_plist "$@"
+  if [ "$rc" -eq 1 ] && grep -qF -- "$msg" <<<"$out"; then echo "ok  info-plist $name"; else echo "KO  info-plist $name (code $rc, message attendu : $msg) : $out"; failed=1; fi
+}
+d_open='<dict>'; d_close='</dict>'
+expect_plist_ok "caméra seule" "$(plist_xml "$d_open
+	<key>CFBundleDisplayName</key>
+	<string>TableScore</string>
+	<key>NSCameraUsageDescription</key>
+	<string>TableScore utilise l appareil photo.</string>
+$d_close")"
+expect_plist_ok "sans permission" "$(plist_xml "$d_open
+	<key>CFBundleDisplayName</key>
+	<string>TableScore</string>
+$d_close")"
+expect_plist_fail "micro" "NSMicrophoneUsageDescription" "$(plist_xml "$d_open
+	<key>NSCameraUsageDescription</key>
+	<string>x</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>x</string>
+$d_close")"
+expect_plist_fail "photothèque" "NSPhotoLibraryUsageDescription" "$(plist_xml "$d_open
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>x</string>
+$d_close")"
+expect_plist_fail "réseau local" "NSLocalNetworkUsageDescription" "$(plist_xml "$d_open
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>x</string>
+$d_close")"
+expect_plist_fail "ATS" "NSAppTransportSecurity" "$(plist_xml "$d_open
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+$d_close")"
+expect_plist_fail "arrière-plan" "UIBackgroundModes" "$(plist_xml "$d_open
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+$d_close")"
+expect_plist_fail "Bonjour" "NSBonjourServices" "$(plist_xml "$d_open
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_x._tcp</string>
+	</array>
+$d_close")"
+expect_plist_fail "caméra vide" "NSCameraUsageDescription vide" "$(plist_xml "$d_open
+	<key>NSCameraUsageDescription</key>
+	<string>  </string>
+$d_close")"
+expect_plist_fail "caméra chaîne vide" "NSCameraUsageDescription vide" "$(plist_xml "$d_open
+	<key>NSCameraUsageDescription</key>
+	<string></string>
+$d_close")"
+expect_plist_fail "caméra non textuelle" "NSCameraUsageDescription vide" "$(plist_xml "$d_open
+	<key>NSCameraUsageDescription</key>
+	<true/>
+$d_close")"
+expect_plist_fail "racine non dictionnaire" "racine non dictionnaire" "$(plist_xml "<array>
+	<string>NSCameraUsageDescription</string>
+</array>")"
+expect_plist_fail "plutil en échec" "plutil en échec" '' STUB_PLUTIL_FAIL=1
 rc=0; out="$(PLUTIL="$stubs/plutil" bash "$here/check-info-plist.sh" "$tmp/absent" 2>&1)" || rc=$?
-if [ "$rc" -eq 1 ]; then echo "ok  info-plist bundle absent"; else echo "KO  info-plist bundle absent (code $rc)"; failed=1; fi
+if [ "$rc" -eq 1 ] && grep -qF -- "Attendu exactement un TableScore.app" <<<"$out"; then echo "ok  info-plist bundle absent"; else echo "KO  info-plist bundle absent (code $rc)"; failed=1; fi
 
 [ "$failed" -eq 0 ] && echo "OK : tous les cas de non-régression passent." || { echo "ÉCHEC"; exit 1; }

@@ -12,13 +12,14 @@
 #  - NSAppTransportSecurity, UIBackgroundModes, NSBonjourServices, NSLocalNetworkUsageDescription ;
 #  - NSCameraUsageDescription présente mais vide ou non textuelle ;
 #  - Info.plist absent, illisible ou dont la racine n'est pas un dictionnaire.
-# Conversion : `plutil -convert json -o - Info.plist` (XML ou binaire), analyse par `jq`.
-# Variables PLUTIL / JQ permettent de substituer les outils (tests de la logique hors macOS).
+# Conversion : `plutil -convert xml1 -o - Info.plist` (XML ou binaire en entrée), puis analyse
+# awk POSIX (ni jq ni python : absents du job Linux). Hypothèse documentée : la sortie xml1 de
+# plutil place une balise <key>…</key> par ligne et la valeur scalaire sur la ligne suivante.
+# Variable PLUTIL : substitution de l'outil (tests de la logique hors macOS).
 set -euo pipefail
 
 dd="${1:?Usage: check-info-plist.sh DERIVED_DATA_PATH}"
 plutil_bin="${PLUTIL:-plutil}"
-jq_bin="${JQ:-jq}"
 products="$dd/Build/Products"
 
 apps=()
@@ -34,31 +35,57 @@ if [ ! -f "$plist" ]; then
   exit 1
 fi
 
-# Aucune tolérance : un échec de conversion fait échouer le contrôle (set -e).
-json="$("$plutil_bin" -convert json -o - "$plist")"
-if ! "$jq_bin" -e 'type == "object"' >/dev/null <<<"$json"; then
-  echo "::error::Info.plist illisible ou racine non dictionnaire : $plist"
+# Aucune tolérance : un échec de conversion fait échouer le contrôle.
+if ! xml="$("$plutil_bin" -convert xml1 -o - "$plist")"; then
+  echo "::error::Info.plist illisible (plutil en échec) : $plist"
   exit 1
 fi
 
+# Sortie awk : lignes « ROOT », « FORBIDDEN <clé> » ou « CAMERA ».
+report="$(awk '
+  function trim(x) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", x); return x }
+  BEGIN { inplist = 0; rootseen = 0; cam = 0; camok = 0 }
+  {
+    line = trim($0)
+    if (cam) {                       # ligne suivant NSCameraUsageDescription
+      cam = 0
+      if (line ~ /^<string>/) {
+        v = line; sub(/^<string>/, "", v); sub(/<\/string>$/, "", v)
+        if (trim(v) != "") camok = 1
+      }
+      if (!camok) print "CAMERA"
+    }
+    if (!rootseen) {
+      if (line ~ /^<plist([ >]|$)/) inplist = 1
+      else if (inplist && line != "") {
+        rootseen = 1
+        if (line !~ /^<dict(>|\/>)/) print "ROOT"
+      }
+    }
+    if (line ~ /^<key>.*<\/key>$/) {
+      k = line; sub(/^<key>/, "", k); sub(/<\/key>$/, "", k)
+      if (k == "NSCameraUsageDescription") cam = 1
+      else if (k ~ /UsageDescription$/ || k == "NSAppTransportSecurity" || k == "UIBackgroundModes" \
+               || k == "NSBonjourServices" || k == "NSLocalNetworkUsageDescription") print "FORBIDDEN " k
+    }
+  }
+  END {
+    if (!rootseen) print "ROOT"
+    if (cam) print "CAMERA"       # clé sans valeur
+  }' <<<"$xml")"
+
 failures=0
-forbidden="$("$jq_bin" -r '
-  keys[]
-  | select(
-      (endswith("UsageDescription") and . != "NSCameraUsageDescription")
-      or . == "NSAppTransportSecurity" or . == "UIBackgroundModes"
-      or . == "NSBonjourServices" or . == "NSLocalNetworkUsageDescription"
-    )' <<<"$json")"
+if grep -q '^ROOT$' <<<"$report"; then
+  echo "::error::Info.plist illisible ou racine non dictionnaire : $plist"
+  failures=$((failures + 1))
+fi
+forbidden="$(sed -n 's/^FORBIDDEN //p' <<<"$report")"
 if [ -n "$forbidden" ]; then
   echo "::error::Clé(s) interdite(s) dans l'Info.plist produit :"
   echo "$forbidden"
   failures=$((failures + 1))
 fi
-
-if ! "$jq_bin" -e '
-  if has("NSCameraUsageDescription")
-  then (.NSCameraUsageDescription | type == "string" and (gsub("\\s"; "") | length) > 0)
-  else true end' >/dev/null <<<"$json"; then
+if grep -q '^CAMERA$' <<<"$report"; then
   echo "::error::NSCameraUsageDescription vide ou non textuelle."
   failures=$((failures + 1))
 fi
