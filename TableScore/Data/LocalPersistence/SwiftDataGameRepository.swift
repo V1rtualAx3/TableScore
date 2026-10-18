@@ -22,25 +22,44 @@ import TableScoreKit
 ///
 /// Écrivain unique : une seule instance par conteneur dans l'application (le contexte conserve
 /// ses objets en cache ; un second écrivain concurrent pourrait lire des valeurs périmées).
+///
+/// Effacement physique (`deleteAllGames` sur un store fichier) : le dépôt **reste la même
+/// instance** (celle détenue par `AppDependencies` et les view models) ; il remplace en interne
+/// son conteneur par un store vide recréé. Pendant l'opération, et si la recréation échoue, le
+/// store est marqué indisponible : toute lecture ou écriture lève une erreur, jamais de résultat
+/// vide présenté comme réel.
 @MainActor
 final class SwiftDataGameRepository: GameRepository {
     /// Point d'injection de la sauvegarde (tests d'échec et de rollback uniquement).
     typealias SaveHandler = @MainActor (ModelContext) throws -> Void
 
-    /// Conservé explicitement : le contexte ne doit jamais survivre à son conteneur.
-    private let container: ModelContainer
+    /// Fichiers d'un store sur disque, nécessaires à l'effacement physique.
+    struct FileStore {
+        let location: StoreLocation
+        let fileSystem: any StoreFileSystem
+    }
+
+    /// Conservé explicitement : le contexte ne doit jamais survivre à son conteneur. Remplacé
+    /// uniquement par l'effacement physique.
+    private var container: ModelContainer
     /// Remplacé après tout échec d'écriture (voir ci-dessus) ; jamais conservé ailleurs.
     private var context: ModelContext
     private let now: @MainActor () -> Date
     private let saveHandler: SaveHandler
+    /// `nil` : store en mémoire (la suppression logique suffit, rien n'est écrit sur disque).
+    private let fileStore: FileStore?
+    /// Faux pendant l'effacement physique et si le store vide n'a pas pu être recréé.
+    private(set) var isStoreAvailable = true
 
     init(
         container: ModelContainer,
+        fileStore: FileStore? = nil,
         now: @escaping @MainActor () -> Date = { Date() },
         saveHandler: @escaping SaveHandler = { try $0.save() }
     ) {
         self.container = container
         self.context = Self.makeContext(container)
+        self.fileStore = fileStore
         self.now = now
         self.saveHandler = saveHandler
     }
@@ -279,6 +298,17 @@ final class SwiftDataGameRepository: GameRepository {
     }
 
     func deleteAllGames() throws(GameRepositoryError) {
+        // Store indisponible après un effacement interrompu : les parties sont déjà supprimées,
+        // seul l'effacement physique et la recréation sont repris.
+        if isStoreAvailable {
+            try deleteAllRecords()
+        }
+        guard let fileStore else { return }
+        try eraseAndRecreateStore(fileStore)
+    }
+
+    /// Suppression logique en une seule transaction (tout ou rien).
+    private func deleteAllRecords() throws(GameRepositoryError) {
         discardPendingChanges()
         // Aucun décodage : fonctionne aussi sur des parties illisibles ou dupliquées.
         let records = try fetch(FetchDescriptor<GameRecord>())
@@ -291,6 +321,58 @@ final class SwiftDataGameRepository: GameRepository {
         for record in records { context.delete(record) }
         // Une seule sauvegarde : tout ou rien (contexte abandonné en cas d'échec).
         try commit()
+    }
+
+    /// Effacement physique après la suppression logique : SQLite ne remet pas à zéro les pages
+    /// libérées (et `PRAGMA secure_delete` n'est pas accessible via SwiftData) ; les prénoms
+    /// pourraient donc subsister dans la base ou le `-wal`. Étapes :
+    /// 1. fermeture du store : le conteneur fichier est remplacé par un conteneur vide en mémoire
+    ///    (plus aucune référence du dépôt vers l'ancien), store marqué indisponible ;
+    /// 2. `StoreFiles.eraseClosedStore` : dossier renommé atomiquement puis supprimé ;
+    /// 3. store vide recréé dans un dossier neuf et protégé, puis installé.
+    /// Si le renommage échoue, l'ancien store (déjà vidé) est rouvert : `.eraseFiles`.
+    /// Si la recréation échoue : store indisponible, `.reopenAfterErase`.
+    private func eraseAndRecreateStore(_ fileStore: FileStore) throws(GameRepositoryError) {
+        let placeholder: ModelContainer
+        do {
+            placeholder = try PersistenceController.makeContainer(storage: .inMemory)
+        } catch {
+            // Store non fermé : rien n'est effacé, l'ancien conteneur reste en place.
+            throw GameRepositoryError.storageFailure(.eraseFiles, message: ErrorDiagnostics.summary(of: error))
+        }
+        isStoreAvailable = false
+        install(placeholder)
+
+        var eraseError: GameRepositoryError?
+        do {
+            let complete = try StoreFiles.eraseClosedStore(fileStore.location, fileSystem: fileStore.fileSystem)
+            if !complete {
+                // Restes supprimés au prochain lancement (`StoreFiles.prepare`).
+                eraseError = .storageFailure(.eraseFiles, message: "ErasureLeftovers")
+            }
+        } catch {
+            // Dossier non renommé : rien n'est effacé, l'ancien store (déjà vidé) est rouvert.
+            eraseError = GameRepositoryError.from(error, operation: .eraseFiles)
+        }
+
+        let reopened: ModelContainer
+        do {
+            reopened = try PersistenceController.makeEmptyFileContainer(
+                at: fileStore.location,
+                fileSystem: fileStore.fileSystem
+            )
+        } catch {
+            throw GameRepositoryError.storageFailure(.reopenAfterErase, message: ErrorDiagnostics.summary(of: error))
+        }
+        install(reopened)
+        isStoreAvailable = true
+        if let eraseError { throw eraseError }
+    }
+
+    /// Remplace conteneur et contexte ; l'ancien contexte n'est plus touché.
+    private func install(_ newContainer: ModelContainer) {
+        container = newContainer
+        context = Self.makeContext(newContainer)
     }
 
     // MARK: Application des plans
@@ -406,6 +488,9 @@ final class SwiftDataGameRepository: GameRepository {
     }
 
     private func fetch<Record: PersistentModel>(_ descriptor: FetchDescriptor<Record>) throws(GameRepositoryError) -> [Record] {
+        guard isStoreAvailable else {
+            throw GameRepositoryError.storageFailure(.read, message: "StoreUnavailable")
+        }
         do {
             return try context.fetch(descriptor)
         } catch {
@@ -416,6 +501,10 @@ final class SwiftDataGameRepository: GameRepository {
     /// Sauvegarde unique de la transaction ; en cas d'échec, le contexte fautif est abandonné
     /// (aucun `rollback()` ni accès à ses objets) et remplacé par un contexte neuf.
     private func commit() throws(GameRepositoryError) {
+        guard isStoreAvailable else {
+            discardContext()
+            throw GameRepositoryError.storageFailure(.write, message: "StoreUnavailable")
+        }
         do {
             try saveHandler(context)
         } catch {

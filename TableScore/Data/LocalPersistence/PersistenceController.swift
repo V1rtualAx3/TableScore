@@ -3,11 +3,12 @@ import SwiftData
 
 /// Emplacement du stockage local.
 enum PersistenceStorage: Sendable, Hashable {
-    /// Fichier `TableScore.store` dans `Library/Application Support` du conteneur privé de l'app.
+    /// Fichier `Store/TableScore.store` dans `Library/Application Support` du conteneur privé de
+    /// l'app (dossier dédié ; ancien emplacement `Application Support/TableScore.store` migré).
     case applicationSupport
     /// Mémoire volatile : tests unitaires, tests UI (`-uiTesting`), previews.
     case inMemory
-    /// Fichier explicite (tests de relance sur disque).
+    /// Fichier explicite (tests de relance sur disque). Son dossier doit être dédié au store.
     case file(URL)
 }
 
@@ -15,20 +16,18 @@ enum PersistenceStorage: Sendable, Hashable {
 ///
 /// - `cloudKitDatabase: .none` : aucune synchronisation, même si une capability apparaissait un jour.
 /// - `groupContainer: .none` / URL explicite : jamais de conteneur partagé (App Group).
-/// - Protection des fichiers : aucun réglage spécifique ; le fichier SQLite (et ses fichiers
-///   `-wal`/`-shm`) hérite de la classe par défaut d'iOS pour les données d'app,
-///   `NSFileProtectionCompleteUntilFirstUserAuthentication` : chiffré par le système tant que
-///   l'appareil n'a pas été déverrouillé une première fois après démarrage, lisible ensuite.
-///   Aucun chiffrement applicatif supplémentaire n'est mis en œuvre ni promis. Comportement non
-///   vérifiable sur simulateur : à contrôler sur appareil (Lot 4).
+/// - Fichiers (voir `StoreFiles`) : dossier dédié `Application Support/Store/`, classe de
+///   protection `NSFileProtectionCompleteUntilFirstUserAuthentication` appliquée explicitement au
+///   dossier (héritée par la base, `-wal` et `-shm`) et aux fichiers existants : chiffrés par le
+///   système tant que l'appareil n'a pas été déverrouillé une première fois après démarrage,
+///   lisibles ensuite (`.complete` ferait échouer une écriture en cours au verrouillage). Aucun
+///   chiffrement applicatif supplémentaire n'est mis en œuvre ni promis. Attribut effectif
+///   vérifiable sur appareil uniquement (le simulateur n'applique pas la protection des données).
 /// - Sauvegardes système de l'appareil : gérées par iOS, hors du contrôle de l'app ; aucune
 ///   synchronisation n'est activée par le code.
 ///
-/// Branchement prévu au Lot 2 (`TableScoreApp`) :
-/// ```
-/// let repository = try PersistenceController.makeRepository(context: .current)
-/// ```
-/// En cas d'échec : afficher une erreur (`userFacingMessage`), jamais de `fatalError`.
+/// Ouverture : `AppBootstrap` (`makeRepository(context: .current)`) ; en cas d'échec, une erreur
+/// (`userFacingMessage`) est affichée, jamais de `fatalError`.
 enum PersistenceController {
     #if DEBUG
     /// Argument de lancement des tests UI : stockage en mémoire (builds Debug uniquement).
@@ -42,6 +41,8 @@ enum PersistenceController {
     static let hostedTestEnvironmentKeys = ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCTestSessionIdentifier"]
     #endif
     static let storeFileName = "TableScore.store"
+    /// Dossier dédié au store dans `Application Support`.
+    static let storeDirectoryName = "Store"
 
     /// Contexte de lancement, injecté pour rendre le choix du stockage testable.
     struct LaunchContext: Sendable, Hashable {
@@ -93,7 +94,27 @@ enum PersistenceController {
 
     /// Emplacement du stockage persistant, dans le conteneur privé de l'application.
     static var defaultStoreURL: URL {
+        URL.applicationSupportDirectory
+            .appending(path: storeDirectoryName, directoryHint: .isDirectory)
+            .appending(path: storeFileName, directoryHint: .notDirectory)
+    }
+
+    /// Ancien emplacement (Lots 1 à 3), migré par déplacement vers `defaultStoreURL`.
+    static var legacyStoreURL: URL {
         URL.applicationSupportDirectory.appending(path: storeFileName, directoryHint: .notDirectory)
+    }
+
+    /// Emplacement fichier d'un stockage (`nil` en mémoire). Seul le store de l'app migre
+    /// l'ancien emplacement.
+    static func storeLocation(for storage: PersistenceStorage) -> StoreLocation? {
+        switch storage {
+        case .inMemory:
+            return nil
+        case .applicationSupport:
+            return StoreLocation(storeURL: defaultStoreURL, legacyStoreURL: legacyStoreURL)
+        case .file(let url):
+            return StoreLocation(storeURL: url)
+        }
     }
 
     #if DEBUG
@@ -158,9 +179,33 @@ enum PersistenceController {
         }
     }
 
+    /// Conteneur du stockage demandé. Store fichier : dossier préparé avant ouverture
+    /// (`StoreFiles.prepare` : protection, migration de l'ancien emplacement).
     static func makeContainer(
         storage: PersistenceStorage,
-        allowsSave: Bool = true
+        allowsSave: Bool = true,
+        fileSystem: any StoreFileSystem = LocalStoreFileSystem()
+    ) throws(GameRepositoryError) -> ModelContainer {
+        if let location = storeLocation(for: storage) {
+            try StoreFiles.prepare(location, fileSystem: fileSystem)
+        }
+        return try openContainer(storage: storage, allowsSave: allowsSave)
+    }
+
+    /// Après « Supprimer toutes les données » : recrée le store vide dans un dossier neuf (ou rouvre
+    /// l'ancien, déjà vidé, si son dossier n'a pas pu être effacé). Sans migration : l'ancien
+    /// emplacement vient d'être vidé ; un reste éventuel ne doit pas être réimporté.
+    static func makeEmptyFileContainer(
+        at location: StoreLocation,
+        fileSystem: any StoreFileSystem
+    ) throws(GameRepositoryError) -> ModelContainer {
+        try StoreFiles.prepare(location, fileSystem: fileSystem, migrateLegacy: false)
+        return try openContainer(storage: .file(location.storeURL), allowsSave: true)
+    }
+
+    private static func openContainer(
+        storage: PersistenceStorage,
+        allowsSave: Bool
     ) throws(GameRepositoryError) -> ModelContainer {
         let schema = currentSchema
         let configuration = try makeConfiguration(storage: storage, schema: schema, allowsSave: allowsSave)
@@ -177,12 +222,53 @@ enum PersistenceController {
 
     /// Dépôt de l'application selon le contexte de lancement (voir `storage(for:)`).
     @MainActor
-    static func makeRepository(context: LaunchContext = .current) throws(GameRepositoryError) -> SwiftDataGameRepository {
+    static func makeRepository(
+        context: LaunchContext = .current,
+        fileSystem: any StoreFileSystem = LocalStoreFileSystem()
+    ) throws(GameRepositoryError) -> SwiftDataGameRepository {
         #if DEBUG
         try resetUITestStoreIfRequested(context: context)
         #endif
-        let container = try makeContainer(storage: storage(for: context))
-        return SwiftDataGameRepository(container: container)
+        return try makeRepository(storage: storage(for: context), fileSystem: fileSystem)
+    }
+
+    /// Dépôt d'un stockage donné ; un store fichier peut être effacé physiquement
+    /// (`deleteAllGames`, voir `SwiftDataGameRepository`).
+    @MainActor
+    static func makeRepository(
+        storage: PersistenceStorage,
+        fileSystem: any StoreFileSystem = LocalStoreFileSystem()
+    ) throws(GameRepositoryError) -> SwiftDataGameRepository {
+        guard let location = storeLocation(for: storage) else {
+            return SwiftDataGameRepository(container: try makeContainer(storage: storage, fileSystem: fileSystem))
+        }
+        return try makeRepository(location: location, fileSystem: fileSystem)
+    }
+
+    /// Dépôt d'un store fichier : dossier préparé (protection, migration), puis ouverture.
+    @MainActor
+    static func makeRepository(
+        location: StoreLocation,
+        fileSystem: any StoreFileSystem = LocalStoreFileSystem()
+    ) throws(GameRepositoryError) -> SwiftDataGameRepository {
+        try StoreFiles.prepare(location, fileSystem: fileSystem)
+        let container = try openContainer(storage: .file(location.storeURL), allowsSave: true)
+        return SwiftDataGameRepository(
+            container: container,
+            fileStore: SwiftDataGameRepository.FileStore(location: location, fileSystem: fileSystem)
+        )
+    }
+
+    /// Met de côté un store illisible (renommage, jamais de suppression ; voir `StoreFiles.setAside`).
+    /// Sans effet en mémoire. Renvoie le nombre d'éléments renommés.
+    @discardableResult
+    static func setAsideUnreadableStore(
+        storage: PersistenceStorage,
+        fileSystem: any StoreFileSystem = LocalStoreFileSystem(),
+        date: Date = Date()
+    ) throws(GameRepositoryError) -> Int {
+        guard let location = storeLocation(for: storage) else { return 0 }
+        return try StoreFiles.setAside(location, fileSystem: fileSystem, date: date)
     }
 
     private static func fileConfiguration(
@@ -192,9 +278,9 @@ enum PersistenceController {
     ) throws(GameRepositoryError) -> ModelConfiguration {
         do {
             // `Application Support` n'existe pas encore lors d'une installation fraîche.
-            try FileManager.default.createDirectory(
+            try LocalStoreFileSystem().createDirectory(
                 at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+                protection: StoreFiles.protection
             )
         } catch {
             throw GameRepositoryError.storageFailure(.setup, message: ErrorDiagnostics.summary(of: error))

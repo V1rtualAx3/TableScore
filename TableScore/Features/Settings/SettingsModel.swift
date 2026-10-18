@@ -48,8 +48,11 @@ final class SettingsModel {
         deletionStep = .idle
     }
 
-    /// Supprime toutes les parties en une transaction. Sans avoir franchi les deux étapes : aucun
-    /// effet. Renvoie `true` si le dépôt a été vidé (l'appelant notifie alors le routeur).
+    /// Supprime toutes les parties (puis, sur disque, efface et recrée le store : voir
+    /// `GameRepository.deleteAllGames`). Sans avoir franchi les deux étapes : aucun effet.
+    /// Renvoie `true` si les parties ont été supprimées, y compris lorsque l'effacement des
+    /// fichiers a ensuite échoué (l'appelant notifie alors le routeur) ; dans ce cas un message
+    /// d'erreur est affiché et `didDeleteAll` reste faux : jamais de faux succès.
     @discardableResult
     func confirmDeleteAll() -> Bool {
         guard deletionStep == .lastConfirmation else { return false }
@@ -60,9 +63,10 @@ final class SettingsModel {
             didDeleteAll = true
             return true
         } catch {
-            errorMessage = GameRepositoryError.from(error, operation: .write).userFacingMessage
+            let repositoryError = GameRepositoryError.from(error, operation: .write)
+            errorMessage = repositoryError.userFacingMessage
             didDeleteAll = false
-            return false
+            return repositoryError.gamesWereDeletedBeforeFailure
         }
     }
 

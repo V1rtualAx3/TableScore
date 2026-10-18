@@ -59,13 +59,16 @@ struct SettingsView: View {
                     Button("Continuer", role: .destructive) { model.continueDeletion() }
                     Button("Annuler", role: .cancel) { model.cancelDeletion() }
                 } message: {
-                    Text("Toutes les parties, en cours, terminées ou interrompues, seront effacées de cet iPhone.")
+                    Text("Toutes les parties, en cours, terminées ou interrompues, seront supprimées de cet iPhone.")
                 }
             } footer: {
                 if model.didDeleteAll {
-                    Label("Toutes les données ont été supprimées.", systemImage: "checkmark.circle")
+                    Label("Toutes les parties ont été supprimées de cet iPhone.", systemImage: "checkmark.circle")
                 } else {
-                    Text("Les parties sont supprimées définitivement, sans possibilité de les récupérer.")
+                    Text(
+                        "Toutes les parties sont supprimées de cet iPhone. Les sauvegardes iCloud ou "
+                        + "de l'ordinateur faites auparavant peuvent encore les contenir."
+                    )
                 }
             }
 
@@ -89,7 +92,7 @@ struct SettingsView: View {
         }
         .onChange(of: model.didDeleteAll) { _, deleted in
             if deleted {
-                AccessibilityNotification.Announcement("Toutes les données ont été supprimées.").post()
+                AccessibilityNotification.Announcement("Toutes les parties ont été supprimées de cet iPhone.").post()
             }
         }
         .onChange(of: model.deletionStep) { _, step in
@@ -108,13 +111,18 @@ struct SettingsView: View {
             isPresented: $isLastConfirmationPresented
         ) {
             Button("Tout supprimer", role: .destructive) {
+                // Vrai aussi si les parties sont supprimées mais l'effacement des fichiers inachevé
+                // (message d'erreur affiché) : les écrans doivent se rafraîchir.
                 if model.confirmDeleteAll() {
                     router.notifyDataChanged()
                 }
             }
             Button("Annuler", role: .cancel) { model.cancelDeletion() }
         } message: {
-            Text("Cette action est irréversible. Toutes les parties seront définitivement supprimées de cet iPhone.")
+            Text(
+                "Cette action est irréversible. Toutes les parties seront supprimées de cet iPhone. "
+                + "Les sauvegardes iCloud ou de l'ordinateur faites auparavant peuvent encore les contenir."
+            )
         }
         .alert(
             "Suppression impossible",

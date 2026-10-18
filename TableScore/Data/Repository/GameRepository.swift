@@ -89,6 +89,12 @@ enum StorageOperation: String, Sendable, Hashable {
     case read
     case write
     case encoding
+    /// « Supprimer toutes les données » : parties supprimées, mais l'effacement physique des
+    /// fichiers du store n'a pas pu être terminé (le stockage reste utilisable).
+    case eraseFiles
+    /// « Supprimer toutes les données » : parties supprimées et fichiers effacés, mais le store
+    /// vide n'a pas pu être recréé ; toute lecture/écriture échoue jusqu'au prochain lancement.
+    case reopenAfterErase
 }
 
 /// Problème de titre de partie (texte libre facultatif).
@@ -164,6 +170,19 @@ enum GameRepositoryError: Error, Sendable, Hashable {
             String(localized: "Impossible de lire les données enregistrées.")
         case .storageFailure(.write, _), .storageFailure(.encoding, _):
             String(localized: "L'enregistrement a échoué. Aucune modification n'a été faite.")
+        case .storageFailure(.eraseFiles, _):
+            String(localized: "Les parties ont été supprimées, mais l'effacement de leurs fichiers n'a pas pu être terminé. Réessayez.")
+        case .storageFailure(.reopenAfterErase, _):
+            String(localized: "Les parties ont été supprimées, mais le stockage n'a pas pu être recréé. Quittez puis relancez l'application.")
+        }
+    }
+
+    /// Vrai si l'échec est survenu **après** la suppression des parties (« Supprimer toutes les
+    /// données ») : l'interface doit se rafraîchir, sans afficher de succès.
+    var gamesWereDeletedBeforeFailure: Bool {
+        switch self {
+        case .storageFailure(.eraseFiles, _), .storageFailure(.reopenAfterErase, _): true
+        default: false
         }
     }
 }
@@ -309,8 +328,16 @@ protocol GameRepository: AnyObject {
     func deleteGame(id: UUID) throws(GameRepositoryError) -> Bool
 
     /// Supprime **toutes** les parties (active, terminées, archivées, illisibles) en une seule
-    /// transaction : en cas d'échec, rien n'est supprimé et `storageFailure` est levée.
-    /// Idempotent (aucune partie ⇒ aucune écriture). La double confirmation est du ressort de l'interface.
+    /// transaction : en cas d'échec, rien n'est supprimé et `storageFailure(.write)` est levée.
+    /// La double confirmation est du ressort de l'interface.
+    ///
+    /// Store fichier (`SwiftDataGameRepository` avec `StoreLocation`) : après la transaction, le
+    /// store est fermé, ses fichiers (base, `-wal`, `-shm`, données mises de côté) sont effacés et
+    /// un store vide est recréé, pour qu'aucun prénom ne subsiste dans des pages libres SQLite.
+    /// Échec après la transaction : `storageFailure(.eraseFiles)` (stockage toujours utilisable)
+    /// ou `storageFailure(.reopenAfterErase)` (stockage indisponible jusqu'au relancement) ; dans
+    /// les deux cas les parties sont déjà supprimées (`gamesWereDeletedBeforeFailure`), jamais de
+    /// faux succès. Un nouvel appel reprend l'effacement.
     func deleteAllGames() throws(GameRepositoryError)
 }
 

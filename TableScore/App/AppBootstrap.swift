@@ -4,7 +4,8 @@ import Observation
 /// Ouverture du stockage local au lancement, sans écran d'attente artificiel ni `fatalError`.
 ///
 /// En cas d'échec, l'interface affiche `GameRepositoryError.userFacingMessage` (jamais le
-/// diagnostic technique) et propose de réessayer.
+/// diagnostic technique) et propose de réessayer ou, sur décision explicite et confirmée, de
+/// mettre de côté les fichiers illisibles pour repartir d'un stockage vide (`StorageErrorView`).
 @Observable
 @MainActor
 final class AppBootstrap {
@@ -23,6 +24,29 @@ final class AppBootstrap {
 
     func retry() {
         state = Self.load(context: context)
+    }
+
+    // MARK: Store illisible
+
+    /// Vrai si le stockage du lancement est un fichier (la mise de côté n'a pas de sens en mémoire).
+    static func canSetAsideUnreadableData(context: PersistenceController.LaunchContext) -> Bool {
+        PersistenceController.storeLocation(for: PersistenceController.storage(for: context)) != nil
+    }
+
+    /// Renomme les fichiers du store en `TableScore-illisible-<horodatage>.store(-wal/-shm)` dans
+    /// le même dossier, **sans rien supprimer** ; l'appelant relance ensuite `retry()`, qui crée
+    /// un store vide. Tout ou rien : en cas d'échec, aucun fichier n'est renommé ni supprimé.
+    /// À n'appeler qu'après confirmation explicite de la personne.
+    static func setAsideUnreadableData(
+        context: PersistenceController.LaunchContext,
+        fileSystem: any StoreFileSystem = LocalStoreFileSystem(),
+        date: Date = Date()
+    ) throws(GameRepositoryError) {
+        try PersistenceController.setAsideUnreadableStore(
+            storage: PersistenceController.storage(for: context),
+            fileSystem: fileSystem,
+            date: date
+        )
     }
 
     private static func load(context: PersistenceController.LaunchContext) -> LaunchState {
