@@ -26,12 +26,23 @@ struct AppConfigurationTests {
         #expect(!hasBackgroundModes)
     }
 
-    @Test("Aucune permission (clé *UsageDescription) ni service Bonjour n'est déclaré")
-    func noUsageDescriptionOrBonjour() {
+    /// Exception unique (prototype P2 « Scanner les cartes », décision utilisateur du 2026-10-18,
+    /// cahier §2) : l'appareil photo. Aucune autre permission (photothèque, micro, localisation…).
+    @Test("Seule la permission appareil photo est déclarée ; aucun service Bonjour")
+    func onlyCameraUsageDescriptionAndNoBonjour() {
         let keys = Bundle.main.infoDictionary?.keys.map { $0 } ?? []
         let usageKeys = keys.filter { $0.hasSuffix("UsageDescription") }
-        #expect(usageKeys.isEmpty)
+        #expect(usageKeys == ["NSCameraUsageDescription"])
         #expect(Bundle.main.object(forInfoDictionaryKey: "NSBonjourServices") == nil)
+    }
+
+    @Test("Texte de la demande d'accès à l'appareil photo : français, non vide, ni conservation ni envoi")
+    func cameraUsageDescriptionText() {
+        let text = Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription") as? String
+        let expected = "TableScore utilise l'appareil photo pour lire les cartes d'un joueur et pré-remplir son "
+            + "décompte. L'image est analysée sur l'iPhone, puis effacée\u{00A0}: elle n'est ni conservée ni envoyée."
+        #expect(text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        #expect(text == expected)
     }
 
     @Test("L'hôte de navigation et l'écran d'accueil se construisent")

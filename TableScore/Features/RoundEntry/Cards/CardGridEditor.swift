@@ -14,11 +14,18 @@ import TableScoreKit
 /// conteneur). Tous les boutons ont un style explicite : l'éditeur peut être placé dans une ligne
 /// de `Form`/`List` sans que la ligne entière ne réagisse.
 ///
-/// `onBeginEditing` est appelé à l'ouverture du sélecteur de valeur (ex. retirer le focus clavier).
+/// `onBeginEditing` est appelé à l'ouverture du sélecteur de valeur ou du scan (ex. retirer le
+/// focus clavier).
+///
+/// Prototype P2 : bouton « Scanner les cartes » au-dessus de la grille (`allowsScanning`, absent
+/// sans appareil photo) ; `flaggedCells` signale les cases à vérifier après un scan tant
+/// qu'elles sont vides (symbole + « à vérifier » pour VoiceOver).
 struct CardGridEditor: View {
     @Binding private var grid: CardGrid
     private let playerName: String
     private let position: Int
+    private let flaggedCells: Set<CardGridPresentation.CellPosition>
+    private let allowsScanning: Bool
     private let onBeginEditing: () -> Void
 
     /// Case en cours de saisie (feuille du sélecteur ouverte).
@@ -31,11 +38,15 @@ struct CardGridEditor: View {
         grid: Binding<CardGrid>,
         playerName: String,
         position: Int,
+        flaggedCells: Set<CardGridPresentation.CellPosition> = [],
+        allowsScanning: Bool = true,
         onBeginEditing: @escaping () -> Void = {}
     ) {
         _grid = grid
         self.playerName = playerName
         self.position = position
+        self.flaggedCells = flaggedCells
+        self.allowsScanning = allowsScanning
         self.onBeginEditing = onBeginEditing
     }
 
@@ -43,10 +54,14 @@ struct CardGridEditor: View {
         let presentation = CardGridPresentation(grid: grid, playerName: playerName, position: position)
         let highlighted = isPickerPresented ? selectedCell : nil
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            if allowsScanning {
+                CardScanButton(grid: $grid, playerName: playerName, position: position, onBegin: { onBeginEditing() })
+            }
             CardGridColumnsLayout { index in
                 CardGridColumnView(
                     column: presentation.columns[index],
                     selectedCell: highlighted,
+                    flaggedCells: flaggedCells,
                     onSelect: { select($0) },
                     onToggleRemoved: { toggleRemoved(column: $0) }
                 )
@@ -145,6 +160,7 @@ struct CardGridEditor: View {
 private struct CardGridColumnView: View {
     let column: CardGridPresentation.Column
     let selectedCell: CardGridPresentation.CellPosition?
+    let flaggedCells: Set<CardGridPresentation.CellPosition>
     let onSelect: (CardGridPresentation.CellPosition) -> Void
     let onToggleRemoved: (Int) -> Void
 
@@ -160,6 +176,7 @@ private struct CardGridColumnView: View {
                 CardCellButton(
                     cell: cell,
                     isSelected: selectedCell == cell.position,
+                    isFlagged: cell.value == nil && flaggedCells.contains(cell.position),
                     onSelect: { onSelect(cell.position) }
                 )
             }
@@ -172,9 +189,11 @@ private struct CardGridColumnView: View {
 
 /// Case : « — » et contour pointillé si vide ; fond plein dès qu'une valeur (y compris 0) est
 /// saisie. Colonne non comptée : valeur barrée, couleur secondaire et mention VoiceOver.
+/// Case à vérifier après un scan (vide) : symbole d'avertissement et « à vérifier ».
 private struct CardCellButton: View {
     let cell: CardGridPresentation.Cell
     let isSelected: Bool
+    let isFlagged: Bool
     let onSelect: () -> Void
 
     @Environment(\.colorSchemeContrast) private var contrast
@@ -191,12 +210,13 @@ private struct CardCellButton: View {
                 .frame(maxWidth: .infinity, minHeight: max(cellHeight, Theme.Size.minTapTarget))
                 .background { background }
                 .overlay { selectionRing }
+                .overlay(alignment: .topTrailing) { flagBadge }
                 .contentShape(RoundedRectangle(cornerRadius: Theme.Spacing.s))
         }
         .buttonStyle(.plain)
         .disabled(!cell.isEditable)
         .accessibilityLabel(Text(verbatim: cell.accessibilityLabel))
-        .accessibilityValue(Text(verbatim: cell.accessibilityValue))
+        .accessibilityValue(Text(verbatim: isFlagged ? "\(cell.accessibilityValue), à vérifier" : cell.accessibilityValue))
         .accessibilityHint(cell.isEditable ? Text("Choisir la valeur de la carte") : Text("Rétablir la colonne pour modifier"))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier(cell.accessibilityIdentifier)
@@ -220,6 +240,17 @@ private struct CardCellButton: View {
             )
         } else {
             shape.fill(Color(uiColor: .tertiarySystemFill))
+        }
+    }
+
+    @ViewBuilder
+    private var flagBadge: some View {
+        if isFlagged {
+            Image(systemName: Theme.Symbol.warning)
+                .font(.caption)
+                .foregroundStyle(Theme.Palette.warning)
+                .padding(Theme.Spacing.xs)
+                .accessibilityHidden(true) // porté par la valeur « à vérifier »
         }
     }
 

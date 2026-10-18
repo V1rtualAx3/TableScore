@@ -29,8 +29,17 @@ Principes non négociables : **offline-first absolu, zéro compte, zéro publici
 | P1 | Profils réutilisables | Réutiliser rapidement les mêmes joueurs entre parties |
 | P2 | Statistiques | Évolution du score, victoires, moyenne par manche, records |
 | P2 | Export à l'initiative de l'utilisateur | CSV/JSON ou partage de résultat via feuille native iOS |
+| P2 | Scanner les cartes d'un joueur (prototype) | Photo prise dans l'app, lecture **sur l'iPhone** ; pré-remplit la grille du mode « cartes », toujours **à vérifier** avant l'enregistrement habituel de la manche (voir exception ci-dessous) |
 
-**Hors périmètre** : jeu numérique avec cartes animées, multijoueur en ligne, compte, cloud, synchronisation, IA, OCR/caméra, classement social, notifications push, Apple Watch, achats intégrés et SDK analytique. Une fonctionnalité nouvelle doit démontrer un gain UX net et ne pas sacrifier la performance ou la confidentialité.
+**Hors périmètre** : jeu numérique avec cartes animées, multijoueur en ligne, compte, cloud, synchronisation, IA, OCR/caméra (sauf l'exception P2 ci-dessous), classement social, notifications push, Apple Watch, achats intégrés et SDK analytique. Une fonctionnalité nouvelle doit démontrer un gain UX net et ne pas sacrifier la performance ou la confidentialité.
+
+**Exception P2 — « Scanner les cartes d'un joueur » (décision explicite de l'utilisateur, 2026-10-18)** : contradiction assumée avec « OCR/caméra » et « aucune permission », limitée à ce seul prototype et aux conditions suivantes :
+
+- prise de vue **directe dans l'app** ; autorisation appareil photo (`NSCameraUsageDescription`) demandée **au premier usage seulement**, avec le texte : « TableScore utilise l'appareil photo pour lire les cartes d'un joueur et pré-remplir son décompte. L'image est analysée sur l'iPhone, puis effacée : elle n'est ni conservée ni envoyée. » Aucune autre permission (photothèque, micro, localisation…) ;
+- traitement **100 % sur l'appareil** (reconnaissance de texte Vision) ; aucune image conservée (ni fichier, ni photothèque) ni transmise ;
+- résultat = **pré-remplissage** de la grille du mode « cartes » (§3.3), cases incertaines laissées vides et signalées ; **aucune validation automatique**, aucune colonne retirée automatiquement, jamais d'écrasement silencieux d'une grille déjà saisie ; rien n'est enregistré avant l'action habituelle d'enregistrement de la manche ;
+- refus ou restriction de l'autorisation, ou absence d'appareil photo ⇒ saisie manuelle intacte ;
+- détails UX et limites : `docs/ux/scan-cartes.md`.
 
 ## 3. Règles de Skyjo classique à implémenter
 
@@ -231,7 +240,7 @@ Règles d'intégrité : UUID stables, aucune entrée pour un participant étrang
 
 - Toutes les données utilisateur restent **dans le conteneur privé de l'application**, sans CloudKit, serveur ni SDK de suivi.
 - Utiliser la protection de données iOS adaptée et vérifier le comportement du stockage SwiftData lorsque le terminal est verrouillé ; ne pas promettre un chiffrement applicatif spécifique sans l'implémenter et le tester.
-- Aucune permission système non nécessaire, aucun secret embarqué, aucun identifiant publicitaire.
+- Aucune permission système non nécessaire (seule exception : appareil photo du prototype P2 « Scanner les cartes », §2), aucun secret embarqué, aucun identifiant publicitaire.
 - Les sauvegardes système de l'iPhone sont indépendantes de toute communication déclenchée par l'application ; ne pas activer explicitement de synchronisation.
 - Export (P2) uniquement après une action volontaire et explicite de la personne, sans transfert automatique.
 
